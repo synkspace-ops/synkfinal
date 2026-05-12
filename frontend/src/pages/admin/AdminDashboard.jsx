@@ -386,6 +386,21 @@ export default function AdminDashboard() {
     () => (overview?.roleBreakdown || []).filter((item) => Number(item.value || 0) > 0),
     [overview]
   );
+  const trafficDateTicks = useMemo(() => {
+    const rows = overview?.daily || [];
+    if (rows.length <= 7) return rows.map((row) => row.label);
+
+    const targetTickCount = rows.length > 21 ? 5 : 4;
+    const tickIndexes = new Set([0, rows.length - 1]);
+    for (let index = 1; index < targetTickCount - 1; index += 1) {
+      tickIndexes.add(Math.round(((rows.length - 1) * index) / (targetTickCount - 1)));
+    }
+
+    return [...tickIndexes]
+      .sort((first, second) => first - second)
+      .map((index) => rows[index]?.label)
+      .filter(Boolean);
+  }, [overview]);
   const statusBreakdown = overview?.statusBreakdown || [];
   const hasDailyData = (overview?.daily || []).some((row) => Number(row.visits || 0) > 0 || Number(row.registrations || 0) > 0);
   const messageActivities = (overview?.recentActivity || []).filter((activity) => activity.type === 'Message');
@@ -442,7 +457,7 @@ export default function AdminDashboard() {
       <div className="h-80">
         {hasDailyData ? (
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={overview?.daily || []} margin={{ top: 10, right: 16, left: -18, bottom: 0 }}>
+            <AreaChart data={overview?.daily || []} margin={{ top: 10, right: 16, left: -18, bottom: 12 }}>
               <defs>
                 <linearGradient id="visits" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#2563eb" stopOpacity={0.35} />
@@ -454,7 +469,17 @@ export default function AdminDashboard() {
                 </linearGradient>
               </defs>
               <CartesianGrid stroke="#e2e8f0" strokeDasharray="4 4" />
-              <XAxis dataKey="label" tick={{ fill: '#64748b', fontSize: 12 }} axisLine={false} tickLine={false} />
+              <XAxis
+                dataKey="label"
+                ticks={trafficDateTicks}
+                interval={0}
+                minTickGap={28}
+                height={38}
+                tickMargin={10}
+                tick={{ fill: '#64748b', fontSize: 11 }}
+                axisLine={false}
+                tickLine={false}
+              />
               <YAxis tick={{ fill: '#64748b', fontSize: 12 }} axisLine={false} tickLine={false} allowDecimals={false} />
               <Tooltip />
               <Area type="monotone" dataKey="visits" stroke="#2563eb" strokeWidth={3} fill="url(#visits)" />
