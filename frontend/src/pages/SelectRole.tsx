@@ -53,6 +53,16 @@ const SelectRole: React.FC = () => {
       <div style={styles.content}>
         <h1 style={styles.title}>Select Your Role</h1>
         <p style={styles.subtitle}>Choose how you want to join SynkSpace to get started.</p>
+        <div style={styles.loginPrompt}>
+          <span style={styles.loginText}>Already registered?</span>
+          <button
+            type="button"
+            style={styles.loginButton}
+            onClick={() => navigate('/login')}
+          >
+            Log in
+          </button>
+        </div>
         
         <div style={styles.grid}>
           {roles.map((role) => (
@@ -108,9 +118,37 @@ const styles: { [key: string]: React.CSSProperties } = {
   subtitle: {
     fontSize: '1.25rem',
     color: '#64748b',
-    marginBottom: '4rem',
+    marginBottom: '1.5rem',
     maxWidth: '600px',
-    margin: '0 auto 4rem',
+    margin: '0 auto 1.5rem',
+  },
+  loginPrompt: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '10px',
+    padding: '10px 14px',
+    borderRadius: '14px',
+    background: '#ffffff',
+    border: '1px solid rgba(203, 213, 225, 0.9)',
+    boxShadow: '0 8px 20px rgba(15, 23, 42, 0.06)',
+    marginBottom: '3rem',
+  },
+  loginText: {
+    color: '#64748b',
+    fontSize: '0.95rem',
+    fontWeight: 600,
+  },
+  loginButton: {
+    border: 'none',
+    background: '#0f172a',
+    color: '#ffffff',
+    borderRadius: '10px',
+    padding: '8px 16px',
+    fontSize: '0.95rem',
+    fontWeight: 700,
+    cursor: 'pointer',
+    transition: 'background 0.2s',
   },
   grid: {
     display: 'grid',
