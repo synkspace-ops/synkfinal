@@ -15,6 +15,7 @@ export type ListRegistrationsInput = {
   limit: number;
 };
 export type UpdateUserStatusInput = { status: Status };
+export type SendAdminMessageInput = { body: string };
 export type ListManagedUsersInput = ListUsersInput;
 export type ListAdminCampaignsInput = {
   status?: CampaignStatus;
@@ -612,8 +613,12 @@ function managedUsersWhere(input: Pick<ListManagedUsersInput, "role" | "status" 
   return where;
 }
 
-export async function listUsers(input: ListUsersInput) {
+export async function listUsers(input: ListUsersInput, options: { excludeAdmins?: boolean } = {}) {
   const where = managedUsersWhere(input);
+  if (options.excludeAdmins) {
+    if (input.role === "ADMIN") return { items: [], total: 0, page: input.page, limit: input.limit };
+    if (!input.role) where.role = { not: "ADMIN" } as Prisma.EnumRoleFilter;
+  }
 
   const [items, total] = await Promise.all([
     prisma.user.findMany({
@@ -710,7 +715,7 @@ export async function updateUserStatus(userId: string, input: UpdateUserStatusIn
 }
 
 export async function listManagedUsers(input: ListManagedUsersInput) {
-  return listUsers(input);
+  return listUsers(input, { excludeAdmins: true });
 }
 
 export async function getManagedUserDetails(userId: string) {
@@ -719,7 +724,7 @@ export async function getManagedUserDetails(userId: string) {
     select: registrationDetailSelect,
   });
 
-  if (!user) throw new Error("User not found");
+  if (!user || user.role === "ADMIN") throw new Error("User not found");
 
   return {
     ...registrationSummary(user),
@@ -732,6 +737,60 @@ export async function getManagedUserDetails(userId: string) {
     messagesReceived: user.messagesReceived,
     notifications: user.notifications,
     loginHistory: (user.loginEvents || []).map(loginHistoryRow),
+  };
+}
+
+export async function sendAdminMessage(adminUserId: string, recipientId: string, input: SendAdminMessageInput) {
+  if (adminUserId === recipientId) throw new Error("Cannot message yourself");
+
+  const [adminUser, recipient] = await Promise.all([
+    prisma.user.findUnique({ where: { id: adminUserId }, select: { id: true, role: true, email: true } }),
+    prisma.user.findUnique({
+      where: { id: recipientId },
+      select: {
+        id: true,
+        role: true,
+        email: true,
+        status: true,
+        creatorProfile: { select: { displayName: true, avatarUrl: true } },
+        brandProfile: { select: { companyName: true, founderName: true, avatarUrl: true } },
+        organiserProfile: { select: { orgName: true, contactName: true, avatarUrl: true } },
+      },
+    }),
+  ]);
+
+  if (!adminUser || adminUser.role !== "ADMIN") throw new Error("Only site admins can send this message");
+  if (!recipient || recipient.role === "ADMIN") throw new Error("User not found");
+
+  const messageBody = input.body.trim();
+  const message = await prisma.$transaction(async (tx) => {
+    const created = await tx.message.create({
+      data: {
+        senderId: adminUserId,
+        recipientId,
+        body: messageBody,
+      },
+    });
+    await tx.notification.create({
+      data: {
+        userId: recipientId,
+        type: "site_admin_message",
+        title: "Message from Site Admin",
+        body: messageBody.length > 180 ? `${messageBody.slice(0, 177)}...` : messageBody,
+      },
+    });
+    return created;
+  });
+
+  return {
+    id: message.id,
+    senderId: message.senderId,
+    senderName: "Site Admin",
+    recipientId: message.recipientId,
+    recipientName: profileDisplayName(recipient),
+    recipientEmail: recipient.email,
+    body: message.body,
+    createdAt: message.createdAt,
   };
 }
 

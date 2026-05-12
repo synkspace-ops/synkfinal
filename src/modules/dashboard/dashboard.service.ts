@@ -78,6 +78,7 @@ function profileName(user: Awaited<ReturnType<typeof getUserWithProfiles>>) {
 
 function displayNameForUser(user: any) {
   if (!user) return "User";
+  if (user.role === "ADMIN") return "Site Admin";
   return (
     user.creatorProfile?.displayName ||
     user.brandProfile?.companyName ||
@@ -94,6 +95,7 @@ function avatarUrlForUser(user: any) {
 }
 
 function subtitleForUser(user: any) {
+  if (user?.role === "ADMIN") return "Site Admin";
   if (user?.creatorProfile) {
     return [user.creatorProfile.niche, user.creatorProfile.followerRange].filter(Boolean).join(" · ");
   }

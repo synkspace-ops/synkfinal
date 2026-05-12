@@ -27,6 +27,10 @@ export const updateUserStatusSchema = z.object({
   status: statusSchema,
 });
 
+export const sendAdminMessageSchema = z.object({
+  body: z.string().trim().min(1).max(5000),
+});
+
 export const listManagedUsersSchema = z.object({
   role: roleSchema.optional(),
   status: statusSchema.optional(),

@@ -18,6 +18,7 @@ import {
   MessageSquare,
   RefreshCw,
   Search,
+  Send,
   ShieldCheck,
   UserCheck,
   UserCog,
@@ -41,7 +42,7 @@ import {
   YAxis,
 } from 'recharts';
 import logo from '../../../assets/synkspace-logo.png';
-import { apiGet, apiPut } from '../../lib/api';
+import { apiGet, apiPost, apiPut } from '../../lib/api';
 import { clearAuthSession } from '../../lib/auth';
 
 const roleColors = ['#0f172a', '#2563eb', '#0891b2', '#f59e0b'];
@@ -73,7 +74,6 @@ const userRoles = [
   { id: 'CREATOR', label: 'Creators' },
   { id: 'BRAND', label: 'Brands' },
   { id: 'ORGANISER', label: 'Event Organisers' },
-  { id: 'ADMIN', label: 'Admins' },
 ];
 
 const accountStatuses = [
@@ -240,7 +240,7 @@ function DetailGrid({ data }) {
   );
 }
 
-function ProfileDetailsDrawer({ detail, loading, error, onClose, onUpdateUserStatus, statusUpdating }) {
+function ProfileDetailsDrawer({ detail, loading, error, onClose, onUpdateUserStatus, onOpenMessage, statusUpdating }) {
   if (!detail && !loading && !error) return null;
 
   return (
@@ -324,6 +324,17 @@ function ProfileDetailsDrawer({ detail, loading, error, onClose, onUpdateUserSta
                             Restore access
                           </button>
                         )}
+                        {onOpenMessage && detail.role !== 'ADMIN' ? (
+                          <button
+                            type="button"
+                            disabled={statusUpdating}
+                            onClick={() => onOpenMessage(detail)}
+                            className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                          >
+                            <Send className="h-4 w-4" />
+                            Message
+                          </button>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
@@ -480,6 +491,62 @@ function EntityDetailsDrawer({ title, subtitle, loading, error, onClose, childre
   );
 }
 
+function AdminMessageDialog({ user, body, error, sending, onBodyChange, onClose, onSubmit }) {
+  if (!user) return null;
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/60 px-4 backdrop-blur-sm">
+      <form onSubmit={onSubmit} className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">Send as Site Admin</p>
+            <h2 className="mt-1 truncate text-xl font-black text-slate-950">{user.name}</h2>
+            <p className="mt-1 truncate text-sm font-semibold text-slate-500">{user.email}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50"
+            aria-label="Close message form"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <label className="mt-5 block text-sm font-black text-slate-700" htmlFor="site-admin-message">
+          Message
+        </label>
+        <textarea
+          id="site-admin-message"
+          value={body}
+          onChange={(event) => onBodyChange(event.target.value)}
+          rows={6}
+          placeholder="Type the message this user should receive..."
+          className="mt-2 w-full resize-none rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-slate-950"
+        />
+        {error ? <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{error}</p> : null}
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-11 rounded-xl border border-slate-200 px-5 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={sending || !body.trim()}
+            className="inline-flex h-11 items-center gap-2 rounded-xl bg-slate-950 px-5 text-sm font-black text-white transition hover:bg-slate-800 disabled:opacity-60"
+          >
+            <Send className="h-4 w-4" />
+            {sending ? 'Sending' : 'Send message'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 export default function AdminDashboard() {
   const navigate = useNavigate();
   const [activeSection, setActiveSection] = useState('overview');
@@ -522,6 +589,10 @@ export default function AdminDashboard() {
   const [submittedManagedSearch, setSubmittedManagedSearch] = useState('');
   const [managedUsersLoading, setManagedUsersLoading] = useState(false);
   const [managedUsersError, setManagedUsersError] = useState('');
+  const [messageUser, setMessageUser] = useState(null);
+  const [adminMessageBody, setAdminMessageBody] = useState('');
+  const [adminMessageError, setAdminMessageError] = useState('');
+  const [adminMessageSending, setAdminMessageSending] = useState(false);
 
   const loadOverview = async ({ silent = false } = {}) => {
     if (silent) {
@@ -715,6 +786,34 @@ export default function AdminDashboard() {
       setProfileError(message);
     } finally {
       setStatusUpdating(false);
+    }
+  };
+
+  const openAdminMessage = (user) => {
+    setMessageUser(user);
+    setAdminMessageBody('');
+    setAdminMessageError('');
+  };
+
+  const closeAdminMessage = () => {
+    setMessageUser(null);
+    setAdminMessageBody('');
+    setAdminMessageError('');
+  };
+
+  const sendAdminMessage = async (event) => {
+    event.preventDefault();
+    if (!messageUser || !adminMessageBody.trim()) return;
+    setAdminMessageSending(true);
+    setAdminMessageError('');
+    try {
+      await apiPost(`/api/admin/user-management/${messageUser.id}/message`, { body: adminMessageBody.trim() });
+      closeAdminMessage();
+      await loadOverview({ silent: true });
+    } catch (messageError) {
+      setAdminMessageError(messageError?.message || 'Could not send message.');
+    } finally {
+      setAdminMessageSending(false);
     }
   };
 
@@ -1370,6 +1469,14 @@ export default function AdminDashboard() {
                   >
                     Profile
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => openAdminMessage(user)}
+                    className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+                  >
+                    <Send className="h-4 w-4" />
+                    Message
+                  </button>
                 </div>
               </div>
             ))}
@@ -1557,6 +1664,7 @@ export default function AdminDashboard() {
           setProfileError('');
         }}
         onUpdateUserStatus={updateUserStatus}
+        onOpenMessage={openAdminMessage}
         statusUpdating={statusUpdating}
       />
       <EntityDetailsDrawer
@@ -1669,6 +1777,15 @@ export default function AdminDashboard() {
           </>
         ) : null}
       </EntityDetailsDrawer>
+      <AdminMessageDialog
+        user={messageUser}
+        body={adminMessageBody}
+        error={adminMessageError}
+        sending={adminMessageSending}
+        onBodyChange={setAdminMessageBody}
+        onClose={closeAdminMessage}
+        onSubmit={sendAdminMessage}
+      />
     </div>
   );
 }

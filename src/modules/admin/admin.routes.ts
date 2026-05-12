@@ -10,6 +10,7 @@ import {
   listRegistrationsSchema,
   listUsersSchema,
   resolveDisputeSchema,
+  sendAdminMessageSchema,
   updateApplicationStatusSchema,
   updateCampaignStatusSchema,
   updateUserStatusSchema,
@@ -80,6 +81,16 @@ export async function adminRoutes(app: FastifyInstance, _opts: FastifyPluginOpti
       const body = updateUserStatusSchema.parse(request.body);
       const data = await adminService.updateUserStatus(request.params.id, body);
       return reply.send({ data, message: "Updated" });
+    }
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/user-management/:id/message",
+    { preHandler: [authGuard, roleGuard("ADMIN")] },
+    async (request, reply) => {
+      const body = sendAdminMessageSchema.parse(request.body);
+      const data = await adminService.sendAdminMessage(request.user!.id, request.params.id, body);
+      return reply.status(201).send({ data, message: "Message sent" });
     }
   );
 
