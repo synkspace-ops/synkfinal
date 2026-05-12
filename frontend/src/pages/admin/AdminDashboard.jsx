@@ -28,8 +28,6 @@ import {
   X,
 } from 'lucide-react';
 import {
-  Area,
-  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
@@ -996,20 +994,10 @@ export default function AdminDashboard() {
 
   const renderTrafficChart = () => (
     <Panel title="Traffic and Registrations" subtitle="Page views and user registrations over the last 30 days">
-      <div className="h-80">
+      <div className="h-72">
         {hasDailyData ? (
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={overview?.daily || []} margin={{ top: 10, right: 16, left: -18, bottom: 12 }}>
-              <defs>
-                <linearGradient id="visits" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#2563eb" stopOpacity={0.35} />
-                  <stop offset="95%" stopColor="#2563eb" stopOpacity={0.02} />
-                </linearGradient>
-                <linearGradient id="registrations" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.35} />
-                  <stop offset="95%" stopColor="#10b981" stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
+            <BarChart data={overview?.daily || []} margin={{ top: 10, right: 16, left: -18, bottom: 12 }} barCategoryGap="35%">
               <CartesianGrid stroke="#e2e8f0" strokeDasharray="4 4" />
               <XAxis
                 dataKey="label"
@@ -1024,9 +1012,9 @@ export default function AdminDashboard() {
               />
               <YAxis tick={{ fill: '#64748b', fontSize: 12 }} axisLine={false} tickLine={false} allowDecimals={false} />
               <Tooltip />
-              <Area type="monotone" dataKey="visits" stroke="#2563eb" strokeWidth={3} fill="url(#visits)" />
-              <Area type="monotone" dataKey="registrations" stroke="#10b981" strokeWidth={3} fill="url(#registrations)" />
-            </AreaChart>
+              <Bar dataKey="visits" name="Page views" fill="#2563eb" radius={[8, 8, 0, 0]} maxBarSize={28} />
+              <Bar dataKey="registrations" name="Registrations" fill="#10b981" radius={[8, 8, 0, 0]} maxBarSize={28} />
+            </BarChart>
           </ResponsiveContainer>
         ) : (
           <EmptyState label="Traffic will appear here as visitors use the website." />
