@@ -7,6 +7,13 @@ export const listUsersSchema = z.object({
   limit: z.coerce.number().min(1).max(100).default(20),
 });
 
+export const listRegistrationsSchema = z.object({
+  role: z.enum(["CREATOR", "BRAND", "ORGANISER"]).default("CREATOR"),
+  search: z.string().trim().max(120).optional(),
+  page: z.coerce.number().min(1).default(1),
+  limit: z.coerce.number().min(1).max(100).default(25),
+});
+
 export const updateUserStatusSchema = z.object({
   status: z.enum(["VERIFIED", "SUSPENDED"]),
 });

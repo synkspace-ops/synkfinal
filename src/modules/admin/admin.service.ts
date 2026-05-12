@@ -7,6 +7,12 @@ export type ListUsersInput = {
   page: number; 
   limit: number 
 };
+export type ListRegistrationsInput = {
+  role: "CREATOR" | "BRAND" | "ORGANISER";
+  search?: string;
+  page: number;
+  limit: number;
+};
 export type UpdateUserStatusInput = { status: "VERIFIED" | "SUSPENDED" };
 export type ResolveDisputeInput = { action: "release" | "refund" };
 export type ListMessageAuditInput = {
@@ -362,6 +368,176 @@ export async function getAdminOverview() {
   };
 }
 
+const registrationListSelect = {
+  id: true,
+  email: true,
+  role: true,
+  status: true,
+  emailVerified: true,
+  createdAt: true,
+  updatedAt: true,
+  creatorProfile: true,
+  brandProfile: true,
+  organiserProfile: true,
+  _count: {
+    select: {
+      applications: true,
+      campaignsAsBrand: true,
+      messagesSent: true,
+      messagesReceived: true,
+      ownedTeamMembers: true,
+      notifications: true,
+    },
+  },
+} satisfies Prisma.UserSelect;
+
+const registrationDetailSelect = {
+  ...registrationListSelect,
+  onboardingProgress: true,
+  applications: {
+    orderBy: { appliedAt: "desc" },
+    take: 12,
+    include: {
+      campaign: {
+        select: {
+          id: true,
+          title: true,
+          category: true,
+          location: true,
+          status: true,
+          budgetMin: true,
+          budgetMax: true,
+          deadline: true,
+          brand: {
+            select: {
+              id: true,
+              email: true,
+              brandProfile: { select: { companyName: true, founderName: true } },
+              organiserProfile: { select: { orgName: true, contactName: true } },
+            },
+          },
+        },
+      },
+    },
+  },
+  campaignsAsBrand: {
+    orderBy: { createdAt: "desc" },
+    take: 12,
+    include: {
+      _count: { select: { applications: true } },
+    },
+  },
+  ownedTeamMembers: {
+    orderBy: { invitedAt: "desc" },
+    take: 20,
+  },
+  teamMembership: true,
+  messagesSent: {
+    orderBy: { createdAt: "desc" },
+    take: 12,
+    select: {
+      id: true,
+      body: true,
+      createdAt: true,
+      readAt: true,
+      recipient: {
+        select: {
+          id: true,
+          email: true,
+          role: true,
+          creatorProfile: { select: { displayName: true } },
+          brandProfile: { select: { companyName: true, founderName: true } },
+          organiserProfile: { select: { orgName: true, contactName: true } },
+        },
+      },
+    },
+  },
+  messagesReceived: {
+    orderBy: { createdAt: "desc" },
+    take: 12,
+    select: {
+      id: true,
+      body: true,
+      createdAt: true,
+      readAt: true,
+      sender: {
+        select: {
+          id: true,
+          email: true,
+          role: true,
+          creatorProfile: { select: { displayName: true } },
+          brandProfile: { select: { companyName: true, founderName: true } },
+          organiserProfile: { select: { orgName: true, contactName: true } },
+        },
+      },
+    },
+  },
+  notifications: {
+    orderBy: { createdAt: "desc" },
+    take: 12,
+  },
+} satisfies Prisma.UserSelect;
+
+function registrationSearchWhere(role: ListRegistrationsInput["role"], search?: string): Prisma.UserWhereInput {
+  const term = search?.trim();
+  const where: Prisma.UserWhereInput = { role };
+  if (!term) return where;
+
+  const contains = { contains: term, mode: "insensitive" as const };
+  const roleSpecific: Record<ListRegistrationsInput["role"], Prisma.UserWhereInput[]> = {
+    CREATOR: [
+      { creatorProfile: { is: { displayName: contains } } },
+      { creatorProfile: { is: { socialHandle: contains } } },
+      { creatorProfile: { is: { niche: contains } } },
+      { creatorProfile: { is: { city: contains } } },
+      { creatorProfile: { is: { state: contains } } },
+    ],
+    BRAND: [
+      { brandProfile: { is: { companyName: contains } } },
+      { brandProfile: { is: { founderName: contains } } },
+      { brandProfile: { is: { industry: contains } } },
+      { brandProfile: { is: { location: contains } } },
+    ],
+    ORGANISER: [
+      { organiserProfile: { is: { orgName: contains } } },
+      { organiserProfile: { is: { contactName: contains } } },
+      { organiserProfile: { is: { city: contains } } },
+      { organiserProfile: { is: { state: contains } } },
+      { organiserProfile: { is: { country: contains } } },
+      { organiserProfile: { is: { eventType: contains } } },
+    ],
+  };
+
+  return {
+    ...where,
+    OR: [{ email: contains }, ...roleSpecific[role]],
+  };
+}
+
+function registrationProfile(user: any) {
+  if (user.role === "CREATOR") return user.creatorProfile;
+  if (user.role === "BRAND") return user.brandProfile;
+  if (user.role === "ORGANISER") return user.organiserProfile;
+  return null;
+}
+
+function registrationSummary(user: any) {
+  const profile = registrationProfile(user);
+  return {
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    status: user.status,
+    emailVerified: user.emailVerified,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+    name: profileDisplayName(user),
+    avatarUrl: profile?.avatarUrl || null,
+    profile,
+    counts: user._count,
+  };
+}
+
 export async function listUsers(input: ListUsersInput) {
   // FIX: Type the 'where' object correctly so Prisma accepts it
   const where: { role?: Role; status?: Status } = {};
@@ -387,6 +563,51 @@ export async function listUsers(input: ListUsersInput) {
     prisma.user.count({ where }),
   ]);
   return { items, total, page: input.page, limit: input.limit };
+}
+
+export async function listRegistrations(input: ListRegistrationsInput) {
+  const where = registrationSearchWhere(input.role, input.search);
+  const [items, total] = await Promise.all([
+    prisma.user.findMany({
+      where,
+      skip: (input.page - 1) * input.limit,
+      take: input.limit,
+      orderBy: { createdAt: "desc" },
+      select: registrationListSelect,
+    }),
+    prisma.user.count({ where }),
+  ]);
+
+  return {
+    role: input.role,
+    items: items.map(registrationSummary),
+    total,
+    page: input.page,
+    limit: input.limit,
+  };
+}
+
+export async function getRegistrationDetails(userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: registrationDetailSelect,
+  });
+
+  if (!user || !["CREATOR", "BRAND", "ORGANISER"].includes(user.role)) {
+    throw new Error("Registration not found");
+  }
+
+  return {
+    ...registrationSummary(user),
+    onboardingProgress: user.onboardingProgress,
+    applications: user.applications,
+    campaigns: user.campaignsAsBrand,
+    ownedTeamMembers: user.ownedTeamMembers,
+    teamMembership: user.teamMembership,
+    messagesSent: user.messagesSent,
+    messagesReceived: user.messagesReceived,
+    notifications: user.notifications,
+  };
 }
 
 export async function updateUserStatus(userId: string, input: UpdateUserStatusInput) {

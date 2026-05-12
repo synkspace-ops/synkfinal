@@ -2,7 +2,7 @@ import { FastifyInstance, FastifyPluginOptions } from "fastify";
 import { authGuard } from "../../middleware/authGuard.js";
 import { roleGuard } from "../../middleware/roleGuard.js";
 import * as adminService from "./admin.service.js";
-import { listUsersSchema, updateUserStatusSchema, resolveDisputeSchema, listMessageAuditSchema } from "./admin.schemas.js";
+import { listUsersSchema, updateUserStatusSchema, resolveDisputeSchema, listMessageAuditSchema, listRegistrationsSchema } from "./admin.schemas.js";
 
 export async function adminRoutes(app: FastifyInstance, _opts: FastifyPluginOptions) {
   app.get(
@@ -39,6 +39,25 @@ export async function adminRoutes(app: FastifyInstance, _opts: FastifyPluginOpti
     { preHandler: [authGuard, roleGuard("ADMIN")] },
     async (request, reply) => {
       const data = await adminService.listDisputes();
+      return reply.send({ data, message: "OK" });
+    }
+  );
+
+  app.get(
+    "/registrations",
+    { preHandler: [authGuard, roleGuard("ADMIN")] },
+    async (request, reply) => {
+      const query = listRegistrationsSchema.parse(request.query);
+      const data = await adminService.listRegistrations(query);
+      return reply.send({ data, message: "OK" });
+    }
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/registrations/:id",
+    { preHandler: [authGuard, roleGuard("ADMIN")] },
+    async (request, reply) => {
+      const data = await adminService.getRegistrationDetails(request.params.id);
       return reply.send({ data, message: "OK" });
     }
   );
