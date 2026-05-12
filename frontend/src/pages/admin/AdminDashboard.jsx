@@ -593,6 +593,12 @@ export default function AdminDashboard() {
   const [adminMessageBody, setAdminMessageBody] = useState('');
   const [adminMessageError, setAdminMessageError] = useState('');
   const [adminMessageSending, setAdminMessageSending] = useState(false);
+  const [adminConversations, setAdminConversations] = useState({ items: [], total: 0 });
+  const [adminConversationsLoading, setAdminConversationsLoading] = useState(false);
+  const [adminConversationsError, setAdminConversationsError] = useState('');
+  const [activeAdminConversationId, setActiveAdminConversationId] = useState('');
+  const [adminChatBody, setAdminChatBody] = useState('');
+  const [adminChatSending, setAdminChatSending] = useState(false);
 
   const loadOverview = async ({ silent = false } = {}) => {
     if (silent) {
@@ -789,6 +795,45 @@ export default function AdminDashboard() {
     }
   };
 
+  const upsertAdminConversation = (conversation) => {
+    if (!conversation?.id) return;
+    setAdminConversations((prev) => {
+      const nextItems = [conversation, ...prev.items.filter((item) => item.id !== conversation.id)]
+        .sort((first, second) => String(second.updatedAt || '').localeCompare(String(first.updatedAt || '')));
+      return { items: nextItems, total: nextItems.length };
+    });
+    setActiveAdminConversationId(conversation.id);
+  };
+
+  const loadAdminConversations = async () => {
+    setAdminConversationsLoading(true);
+    setAdminConversationsError('');
+    try {
+      const response = await apiGet('/api/admin/messages/conversations');
+      const data = response?.data || { items: [], total: 0 };
+      setAdminConversations(data);
+      setActiveAdminConversationId((current) => {
+        if (current && data.items.some((item) => item.id === current)) return current;
+        return data.items[0]?.id || '';
+      });
+    } catch (conversationError) {
+      setAdminConversationsError(conversationError?.message || 'Could not load admin conversations.');
+    } finally {
+      setAdminConversationsLoading(false);
+    }
+  };
+
+  const openAdminConversation = async (conversationId) => {
+    setActiveAdminConversationId(conversationId);
+    setAdminConversationsError('');
+    try {
+      const response = await apiGet(`/api/admin/messages/conversations/${conversationId}`);
+      upsertAdminConversation(response?.data);
+    } catch (conversationError) {
+      setAdminConversationsError(conversationError?.message || 'Could not load conversation.');
+    }
+  };
+
   const openAdminMessage = (user) => {
     setMessageUser(user);
     setAdminMessageBody('');
@@ -809,11 +854,28 @@ export default function AdminDashboard() {
     try {
       await apiPost(`/api/admin/user-management/${messageUser.id}/message`, { body: adminMessageBody.trim() });
       closeAdminMessage();
-      await loadOverview({ silent: true });
+      await Promise.all([loadOverview({ silent: true }), loadAdminConversations()]);
     } catch (messageError) {
       setAdminMessageError(messageError?.message || 'Could not send message.');
     } finally {
       setAdminMessageSending(false);
+    }
+  };
+
+  const sendAdminChatMessage = async (event) => {
+    event.preventDefault();
+    if (!activeAdminConversationId || !adminChatBody.trim()) return;
+    setAdminChatSending(true);
+    setAdminConversationsError('');
+    try {
+      const response = await apiPost(`/api/admin/messages/conversations/${activeAdminConversationId}`, { body: adminChatBody.trim() });
+      upsertAdminConversation(response?.data);
+      setAdminChatBody('');
+      await loadOverview({ silent: true });
+    } catch (messageError) {
+      setAdminConversationsError(messageError?.message || 'Could not send message.');
+    } finally {
+      setAdminChatSending(false);
     }
   };
 
@@ -836,6 +898,10 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (activeSection === 'user-management') loadManagedUsers();
   }, [activeSection, managedRole, managedStatus, managedUsers.page, submittedManagedSearch]);
+
+  useEffect(() => {
+    if (activeSection === 'messages') loadAdminConversations();
+  }, [activeSection]);
 
   const totals = overview?.totals || {};
   const activeNav = navItems.find((item) => item.id === activeSection) || navItems[0];
@@ -861,6 +927,7 @@ export default function AdminDashboard() {
   const statusBreakdown = overview?.statusBreakdown || [];
   const hasDailyData = (overview?.daily || []).some((row) => Number(row.visits || 0) > 0 || Number(row.registrations || 0) > 0);
   const messageActivities = (overview?.recentActivity || []).filter((activity) => activity.type === 'Message');
+  const activeAdminConversation = adminConversations.items.find((conversation) => conversation.id === activeAdminConversationId) || null;
 
   const handleLogout = () => {
     clearAuthSession();
@@ -1492,18 +1559,127 @@ export default function AdminDashboard() {
     <div className="space-y-6">
       <section className="grid gap-4 md:grid-cols-3">
         <StatCard icon={MessageSquare} label="Total Messages" value={formatNumber(totals.messages)} hint={`${formatNumber(totals.directMessages)} direct messages`} />
-        <StatCard icon={Mail} label="Direct Messages" value={formatNumber(totals.directMessages)} hint="Stored for audit access" />
+        <StatCard icon={Mail} label="Admin Chats" value={formatNumber(adminConversations.total)} hint="Conversations started by Site Admin" />
         <StatCard icon={Activity} label="Recent Message Events" value={formatNumber(messageActivities.length)} hint="From latest activity feed" />
       </section>
-      <Panel title="Recent Message Activity" subtitle="Latest message events captured from the database">
-        <div className="space-y-3">
-          {messageActivities.length ? messageActivities.map((item) => (
-            <div key={item.id} className="rounded-xl bg-slate-50 px-4 py-3">
-              <p className="text-sm font-bold text-slate-800">{item.title}</p>
-              <p className="mt-1 text-xs font-semibold text-slate-400">{formatDate(item.at)}</p>
+
+      <Panel
+        title="Site Admin Inbox"
+        subtitle="Chats with users who have received a message from Site Admin"
+        action={
+          <button
+            type="button"
+            onClick={loadAdminConversations}
+            disabled={adminConversationsLoading}
+            className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-black text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+          >
+            <RefreshCw className={`h-4 w-4 ${adminConversationsLoading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+        }
+      >
+        {adminConversationsError ? (
+          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{adminConversationsError}</div>
+        ) : null}
+        {adminConversationsLoading ? (
+          <div className="flex min-h-96 items-center justify-center gap-3 text-sm font-bold text-slate-500">
+            <RefreshCw className="h-5 w-5 animate-spin" />
+            Loading admin chats
+          </div>
+        ) : adminConversations.items.length ? (
+          <div className="grid min-h-[620px] overflow-hidden rounded-2xl border border-slate-200 bg-white lg:grid-cols-[340px_minmax(0,1fr)]">
+            <div className="border-b border-slate-200 bg-slate-50 lg:border-b-0 lg:border-r">
+              <div className="border-b border-slate-200 px-4 py-3">
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">Conversations</p>
+              </div>
+              <div className="max-h-[560px] overflow-y-auto">
+                {adminConversations.items.map((conversation) => (
+                  <button
+                    key={conversation.id}
+                    type="button"
+                    onClick={() => openAdminConversation(conversation.id)}
+                    className={`flex w-full items-start gap-3 border-b border-slate-200 px-4 py-4 text-left transition last:border-b-0 ${
+                      activeAdminConversationId === conversation.id ? 'bg-white' : 'hover:bg-white/80'
+                    }`}
+                  >
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-slate-950 text-sm font-black text-white">
+                      {conversation.avatarUrl ? <img src={conversation.avatarUrl} alt={conversation.name} className="h-full w-full object-cover" /> : conversation.name?.charAt(0)}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="truncate text-sm font-black text-slate-950">{conversation.name}</p>
+                        {conversation.unread ? <span className="rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-black text-white">{conversation.unread}</span> : null}
+                      </div>
+                      <p className="mt-1 truncate text-xs font-semibold text-slate-500">{conversation.role} • {conversation.email}</p>
+                      <p className="mt-2 line-clamp-2 text-xs font-semibold text-slate-400">{conversation.lastMessage || 'No messages yet'}</p>
+                    </div>
+                  </button>
+                ))}
+              </div>
             </div>
-          )) : <EmptyState label="No recent message activity found." />}
-        </div>
+
+            <div className="flex min-h-[620px] flex-col">
+              {activeAdminConversation ? (
+                <>
+                  <div className="flex items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="truncate text-lg font-black text-slate-950">{activeAdminConversation.name}</h3>
+                        <StatusBadge status={activeAdminConversation.status} />
+                      </div>
+                      <p className="mt-1 truncate text-sm font-semibold text-slate-500">{activeAdminConversation.email}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openProfileDetails(activeAdminConversation.userId, 'user-management')}
+                      className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+                    >
+                      Profile
+                    </button>
+                  </div>
+
+                  <div className="flex-1 space-y-3 overflow-y-auto bg-slate-50 px-5 py-5">
+                    {activeAdminConversation.messages.map((message) => (
+                      <div key={message.id} className={`flex ${message.isMine ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`max-w-[78%] rounded-2xl px-4 py-3 shadow-sm ${
+                          message.isMine ? 'bg-slate-950 text-white' : 'border border-slate-200 bg-white text-slate-800'
+                        }`}>
+                          <p className={`text-[11px] font-black uppercase tracking-[0.12em] ${message.isMine ? 'text-slate-300' : 'text-slate-400'}`}>
+                            {message.senderName}
+                          </p>
+                          <p className="mt-1 whitespace-pre-wrap break-words text-sm font-semibold leading-6">{message.body}</p>
+                          <p className={`mt-2 text-[11px] font-bold ${message.isMine ? 'text-slate-300' : 'text-slate-400'}`}>{formatDate(message.createdAt)}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <form onSubmit={sendAdminChatMessage} className="flex gap-3 border-t border-slate-200 bg-white px-5 py-4">
+                    <textarea
+                      value={adminChatBody}
+                      onChange={(event) => setAdminChatBody(event.target.value)}
+                      rows={2}
+                      placeholder={`Message ${activeAdminConversation.name} as Site Admin...`}
+                      className="min-h-12 flex-1 resize-none rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-slate-950"
+                    />
+                    <button
+                      type="submit"
+                      disabled={adminChatSending || !adminChatBody.trim()}
+                      className="inline-flex h-12 items-center gap-2 rounded-xl bg-slate-950 px-5 text-sm font-black text-white transition hover:bg-slate-800 disabled:opacity-60"
+                    >
+                      <Send className="h-4 w-4" />
+                      Send
+                    </button>
+                  </form>
+                </>
+              ) : (
+                <EmptyState label="Select a conversation to view messages." />
+              )}
+            </div>
+          </div>
+        ) : (
+          <EmptyState label="No Site Admin conversations yet. Send a message from User Management to start one." />
+        )}
       </Panel>
     </div>
   );
@@ -1610,12 +1786,13 @@ export default function AdminDashboard() {
                   if (activeSection === 'campaigns') loadCampaigns();
                   if (activeSection === 'applications') loadApplications();
                   if (activeSection === 'user-management') loadManagedUsers();
+                  if (activeSection === 'messages') loadAdminConversations();
                   loadOverview({ silent: true });
                 }}
-                disabled={refreshing || registrationsLoading || campaignsLoading || applicationsLoading || managedUsersLoading}
+                disabled={refreshing || registrationsLoading || campaignsLoading || applicationsLoading || managedUsersLoading || adminConversationsLoading}
                 className="inline-flex h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 disabled:opacity-60"
               >
-                <RefreshCw className={`h-4 w-4 ${(refreshing || registrationsLoading || campaignsLoading || applicationsLoading || managedUsersLoading) ? 'animate-spin' : ''}`} />
+                <RefreshCw className={`h-4 w-4 ${(refreshing || registrationsLoading || campaignsLoading || applicationsLoading || managedUsersLoading || adminConversationsLoading) ? 'animate-spin' : ''}`} />
                 Refresh
               </button>
               <button

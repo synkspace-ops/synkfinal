@@ -95,6 +95,25 @@ export async function adminRoutes(app: FastifyInstance, _opts: FastifyPluginOpti
   );
 
   app.get(
+    "/messages/conversations",
+    { preHandler: [authGuard, roleGuard("ADMIN")] },
+    async (request, reply) => {
+      const data = await adminService.listAdminConversations(request.user!.id);
+      return reply.send({ data, message: "OK" });
+    }
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/messages/conversations/:id",
+    { preHandler: [authGuard, roleGuard("ADMIN")] },
+    async (request, reply) => {
+      const body = sendAdminMessageSchema.parse(request.body);
+      const data = await adminService.sendAdminConversationMessage(request.user!.id, request.params.id, body);
+      return reply.status(201).send({ data, message: "Message sent" });
+    }
+  );
+
+  app.get(
     "/campaigns",
     { preHandler: [authGuard, roleGuard("ADMIN")] },
     async (request, reply) => {

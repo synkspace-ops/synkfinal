@@ -135,6 +135,23 @@ function profileDisplayName(user: any) {
   );
 }
 
+function profileAvatarUrl(user: any) {
+  return user?.creatorProfile?.avatarUrl || user?.brandProfile?.avatarUrl || user?.organiserProfile?.avatarUrl || null;
+}
+
+function profileContext(user: any) {
+  if (user?.creatorProfile) {
+    return [user.creatorProfile.niche, user.creatorProfile.city || user.creatorProfile.state, user.creatorProfile.followerRange].filter(Boolean).join(" • ");
+  }
+  if (user?.brandProfile) {
+    return [user.brandProfile.industry, user.brandProfile.location, user.brandProfile.companySize].filter(Boolean).join(" • ");
+  }
+  if (user?.organiserProfile) {
+    return [user.organiserProfile.eventType, user.organiserProfile.city || user.organiserProfile.state, user.organiserProfile.footfall].filter(Boolean).join(" • ");
+  }
+  return user?.role || "User";
+}
+
 function accountLifecycleStatus(status: Status) {
   if (status === "VERIFIED") return "ACTIVE";
   if (status === "SUSPENDED") return "BLOCKED";
@@ -792,6 +809,151 @@ export async function sendAdminMessage(adminUserId: string, recipientId: string,
     body: message.body,
     createdAt: message.createdAt,
   };
+}
+
+const adminConversationUserSelect = {
+  id: true,
+  email: true,
+  role: true,
+  status: true,
+  creatorProfile: true,
+  brandProfile: true,
+  organiserProfile: true,
+} satisfies Prisma.UserSelect;
+
+function adminConversationMessage(message: any, adminUserId: string) {
+  const mine = message.senderId === adminUserId;
+  return {
+    id: message.id,
+    senderId: message.senderId,
+    recipientId: message.recipientId,
+    senderName: mine ? "Site Admin" : profileDisplayName(message.sender),
+    body: message.body,
+    text: message.body,
+    isMine: mine,
+    readAt: message.readAt,
+    createdAt: message.createdAt,
+  };
+}
+
+function buildAdminConversation(adminUserId: string, user: any, messages: any[]) {
+  const ordered = [...messages].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  const last = ordered.at(-1);
+  return {
+    id: user.id,
+    userId: user.id,
+    name: profileDisplayName(user),
+    email: user.email,
+    role: user.role,
+    status: user.status,
+    avatarUrl: profileAvatarUrl(user),
+    subtitle: profileContext(user),
+    unread: ordered.filter((message) => message.senderId !== adminUserId && !message.readAt).length,
+    lastMessage: last?.body || "",
+    updatedAt: last?.createdAt || null,
+    messages: ordered.map((message) => adminConversationMessage(message, adminUserId)),
+  };
+}
+
+async function getAdminDirectMessages(adminUserId: string) {
+  return prisma.message.findMany({
+    where: {
+      applicationId: null,
+      OR: [{ senderId: adminUserId }, { recipientId: adminUserId }],
+    },
+    orderBy: { createdAt: "asc" },
+    include: {
+      sender: { select: adminConversationUserSelect },
+      recipient: { select: adminConversationUserSelect },
+    },
+  });
+}
+
+async function assertAdminUser(adminUserId: string) {
+  const adminUser = await prisma.user.findUnique({ where: { id: adminUserId }, select: { id: true, role: true } });
+  if (!adminUser || adminUser.role !== "ADMIN") throw new Error("Only site admins can use this inbox");
+  return adminUser;
+}
+
+export async function listAdminConversations(adminUserId: string) {
+  await assertAdminUser(adminUserId);
+  const messages = await getAdminDirectMessages(adminUserId);
+  const groups = new Map<string, { user: any; messages: any[] }>();
+
+  for (const message of messages) {
+    const otherUser = message.senderId === adminUserId ? message.recipient : message.sender;
+    if (!otherUser || otherUser.role === "ADMIN") continue;
+    const existing = groups.get(otherUser.id);
+    if (existing) {
+      existing.messages.push(message);
+    } else {
+      groups.set(otherUser.id, { user: otherUser, messages: [message] });
+    }
+  }
+
+  const items = Array.from(groups.values())
+    .filter((group) => group.messages.some((message) => message.senderId === adminUserId))
+    .map((group) => buildAdminConversation(adminUserId, group.user, group.messages))
+    .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+
+  return { items, total: items.length };
+}
+
+export async function getAdminConversation(adminUserId: string, userId: string) {
+  await assertAdminUser(adminUserId);
+  const [user, messages] = await Promise.all([
+    prisma.user.findUnique({ where: { id: userId }, select: adminConversationUserSelect }),
+    prisma.message.findMany({
+      where: {
+        applicationId: null,
+        OR: [
+          { senderId: adminUserId, recipientId: userId },
+          { senderId: userId, recipientId: adminUserId },
+        ],
+      },
+      orderBy: { createdAt: "asc" },
+      include: {
+        sender: { select: adminConversationUserSelect },
+        recipient: { select: adminConversationUserSelect },
+      },
+    }),
+  ]);
+
+  if (!user || user.role === "ADMIN" || !messages.some((message) => message.senderId === adminUserId)) {
+    throw new Error("Conversation not found");
+  }
+
+  await prisma.message.updateMany({
+    where: {
+      applicationId: null,
+      senderId: userId,
+      recipientId: adminUserId,
+      readAt: null,
+    },
+    data: { readAt: new Date() },
+  });
+
+  const reloaded = await prisma.message.findMany({
+    where: {
+      applicationId: null,
+      OR: [
+        { senderId: adminUserId, recipientId: userId },
+        { senderId: userId, recipientId: adminUserId },
+      ],
+    },
+    orderBy: { createdAt: "asc" },
+    include: {
+      sender: { select: adminConversationUserSelect },
+      recipient: { select: adminConversationUserSelect },
+    },
+  });
+
+  return buildAdminConversation(adminUserId, user, reloaded);
+}
+
+export async function sendAdminConversationMessage(adminUserId: string, recipientId: string, input: SendAdminMessageInput) {
+  await sendAdminMessage(adminUserId, recipientId, input);
+  return getAdminConversation(adminUserId, recipientId);
 }
 
 const adminCampaignSelect = {
