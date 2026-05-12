@@ -1,9 +1,10 @@
 import { prisma } from "../../db/client.js";
-import { Prisma, type Status, type Role } from "@prisma/client";
+import { Prisma, type AppStatus, type CampaignStatus, type Role, type Status } from "@prisma/client";
 
 export type ListUsersInput = { 
   role?: "CREATOR" | "BRAND" | "ORGANISER" | "ADMIN"; 
   status?: Status; 
+  search?: string;
   page: number; 
   limit: number 
 };
@@ -13,7 +14,22 @@ export type ListRegistrationsInput = {
   page: number;
   limit: number;
 };
-export type UpdateUserStatusInput = { status: "VERIFIED" | "SUSPENDED" };
+export type UpdateUserStatusInput = { status: Status };
+export type ListManagedUsersInput = ListUsersInput;
+export type ListAdminCampaignsInput = {
+  status?: CampaignStatus;
+  search?: string;
+  page: number;
+  limit: number;
+};
+export type UpdateCampaignStatusInput = { status: CampaignStatus };
+export type ListAdminApplicationsInput = {
+  status?: AppStatus;
+  search?: string;
+  page: number;
+  limit: number;
+};
+export type UpdateApplicationStatusInput = { status: AppStatus };
 export type ResolveDisputeInput = { action: "release" | "refund" };
 export type ListMessageAuditInput = {
   applicationId?: string;
@@ -116,6 +132,24 @@ function profileDisplayName(user: any) {
     user.organiserProfile?.orgName ||
     user.email.split("@")[0]
   );
+}
+
+function accountLifecycleStatus(status: Status) {
+  if (status === "VERIFIED") return "ACTIVE";
+  if (status === "SUSPENDED") return "BLOCKED";
+  return "PENDING";
+}
+
+function loginHistoryRow(event: any) {
+  return {
+    id: event.id,
+    email: event.email,
+    success: event.success,
+    failureReason: event.failureReason,
+    ip: event.ip,
+    userAgent: event.userAgent,
+    createdAt: event.createdAt,
+  };
 }
 
 function aggregateCount(row: { value?: number; _count?: true | { _all?: number } }) {
@@ -387,6 +421,7 @@ const registrationListSelect = {
       messagesReceived: true,
       ownedTeamMembers: true,
       notifications: true,
+      loginEvents: true,
     },
   },
 } satisfies Prisma.UserSelect;
@@ -476,6 +511,19 @@ const registrationDetailSelect = {
     orderBy: { createdAt: "desc" },
     take: 12,
   },
+  loginEvents: {
+    orderBy: { createdAt: "desc" },
+    take: 25,
+    select: {
+      id: true,
+      email: true,
+      success: true,
+      failureReason: true,
+      ip: true,
+      userAgent: true,
+      createdAt: true,
+    },
+  },
 } satisfies Prisma.UserSelect;
 
 function registrationSearchWhere(role: ListRegistrationsInput["role"], search?: string): Prisma.UserWhereInput {
@@ -528,6 +576,7 @@ function registrationSummary(user: any) {
     email: user.email,
     role: user.role,
     status: user.status,
+    currentStatus: accountLifecycleStatus(user.status),
     emailVerified: user.emailVerified,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
@@ -538,12 +587,33 @@ function registrationSummary(user: any) {
   };
 }
 
-export async function listUsers(input: ListUsersInput) {
-  // FIX: Type the 'where' object correctly so Prisma accepts it
-  const where: { role?: Role; status?: Status } = {};
-  
+function managedUsersWhere(input: Pick<ListManagedUsersInput, "role" | "status" | "search">): Prisma.UserWhereInput {
+  const where: Prisma.UserWhereInput = {};
   if (input.role) where.role = input.role as Role;
-  if (input.status) where.status = input.status;
+  if (input.status) where.status = input.status as Status;
+
+  const term = input.search?.trim();
+  if (term) {
+    const contains = { contains: term, mode: "insensitive" as const };
+    where.OR = [
+      { email: contains },
+      { creatorProfile: { is: { displayName: contains } } },
+      { creatorProfile: { is: { socialHandle: contains } } },
+      { creatorProfile: { is: { phone: contains } } },
+      { brandProfile: { is: { companyName: contains } } },
+      { brandProfile: { is: { founderName: contains } } },
+      { brandProfile: { is: { phone: contains } } },
+      { organiserProfile: { is: { orgName: contains } } },
+      { organiserProfile: { is: { contactName: contains } } },
+      { organiserProfile: { is: { phone: contains } } },
+    ];
+  }
+
+  return where;
+}
+
+export async function listUsers(input: ListUsersInput) {
+  const where = managedUsersWhere(input);
 
   const [items, total] = await Promise.all([
     prisma.user.findMany({
@@ -558,11 +628,24 @@ export async function listUsers(input: ListUsersInput) {
         status: true,
         emailVerified: true,
         createdAt: true,
+        updatedAt: true,
+        creatorProfile: true,
+        brandProfile: true,
+        organiserProfile: true,
+        _count: {
+          select: {
+            applications: true,
+            campaignsAsBrand: true,
+            messagesSent: true,
+            messagesReceived: true,
+            loginEvents: true,
+          },
+        },
       },
     }),
     prisma.user.count({ where }),
   ]);
-  return { items, total, page: input.page, limit: input.limit };
+  return { items: items.map(registrationSummary), total, page: input.page, limit: input.limit };
 }
 
 export async function listRegistrations(input: ListRegistrationsInput) {
@@ -607,14 +690,342 @@ export async function getRegistrationDetails(userId: string) {
     messagesSent: user.messagesSent,
     messagesReceived: user.messagesReceived,
     notifications: user.notifications,
+    loginHistory: (user.loginEvents || []).map(loginHistoryRow),
   };
 }
 
 export async function updateUserStatus(userId: string, input: UpdateUserStatusInput) {
-  return prisma.user.update({
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, role: true, status: true } });
+  if (!user) throw new Error("User not found");
+  if (user.role === "ADMIN" && input.status === "SUSPENDED") {
+    throw new Error("Admin users cannot be suspended from the admin dashboard");
+  }
+
+  const updated = await prisma.user.update({
     where: { id: userId },
-    data: { status: input.status as Status }, // Cast to Status enum
+    data: { status: input.status as Status },
+    select: registrationListSelect,
   });
+  return registrationSummary(updated);
+}
+
+export async function listManagedUsers(input: ListManagedUsersInput) {
+  return listUsers(input);
+}
+
+export async function getManagedUserDetails(userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: registrationDetailSelect,
+  });
+
+  if (!user) throw new Error("User not found");
+
+  return {
+    ...registrationSummary(user),
+    onboardingProgress: user.onboardingProgress,
+    applications: user.applications,
+    campaigns: user.campaignsAsBrand,
+    ownedTeamMembers: user.ownedTeamMembers,
+    teamMembership: user.teamMembership,
+    messagesSent: user.messagesSent,
+    messagesReceived: user.messagesReceived,
+    notifications: user.notifications,
+    loginHistory: (user.loginEvents || []).map(loginHistoryRow),
+  };
+}
+
+const adminCampaignSelect = {
+  id: true,
+  brandId: true,
+  title: true,
+  description: true,
+  category: true,
+  budgetMin: true,
+  budgetMax: true,
+  totalSlots: true,
+  filledSlots: true,
+  location: true,
+  platforms: true,
+  deliverables: true,
+  deadline: true,
+  status: true,
+  createdAt: true,
+  updatedAt: true,
+  brand: {
+    select: {
+      id: true,
+      email: true,
+      role: true,
+      status: true,
+      brandProfile: { select: { companyName: true, founderName: true, industry: true, phone: true, location: true, avatarUrl: true } },
+      organiserProfile: { select: { orgName: true, contactName: true, eventType: true, phone: true, city: true, state: true, avatarUrl: true } },
+    },
+  },
+  _count: {
+    select: {
+      applications: true,
+    },
+  },
+} satisfies Prisma.CampaignSelect;
+
+const adminCampaignDetailSelect = {
+  ...adminCampaignSelect,
+  applications: {
+    orderBy: { appliedAt: "desc" },
+    take: 50,
+    include: {
+      creator: {
+        select: {
+          id: true,
+          email: true,
+          status: true,
+          creatorProfile: true,
+        },
+      },
+      contract: {
+        include: {
+          escrow: true,
+          deliverables: true,
+          reviews: true,
+        },
+      },
+      _count: {
+        select: {
+          messages: true,
+        },
+      },
+    },
+  },
+} satisfies Prisma.CampaignSelect;
+
+const adminApplicationSelect = {
+  id: true,
+  campaignId: true,
+  creatorId: true,
+  status: true,
+  proposedRate: true,
+  message: true,
+  appliedAt: true,
+  campaign: {
+    select: {
+      id: true,
+      title: true,
+      category: true,
+      location: true,
+      status: true,
+      budgetMin: true,
+      budgetMax: true,
+      deadline: true,
+      totalSlots: true,
+      filledSlots: true,
+      brand: {
+        select: {
+          id: true,
+          email: true,
+          role: true,
+          brandProfile: { select: { companyName: true, founderName: true, avatarUrl: true } },
+          organiserProfile: { select: { orgName: true, contactName: true, avatarUrl: true } },
+        },
+      },
+    },
+  },
+  creator: {
+    select: {
+      id: true,
+      email: true,
+      status: true,
+      creatorProfile: true,
+    },
+  },
+  contract: {
+    include: {
+      escrow: true,
+      deliverables: true,
+      reviews: true,
+    },
+  },
+  _count: {
+    select: {
+      messages: true,
+    },
+  },
+} satisfies Prisma.ApplicationSelect;
+
+function campaignOwnerName(user: any) {
+  return user?.brandProfile?.companyName || user?.organiserProfile?.orgName || user?.email?.split("@")?.[0] || "Account";
+}
+
+function campaignWhere(input: ListAdminCampaignsInput): Prisma.CampaignWhereInput {
+  const where: Prisma.CampaignWhereInput = {};
+  if (input.status) where.status = input.status as CampaignStatus;
+
+  const term = input.search?.trim();
+  if (term) {
+    const contains = { contains: term, mode: "insensitive" as const };
+    where.OR = [
+      { title: contains },
+      { description: contains },
+      { category: contains },
+      { location: contains },
+      { brand: { is: { email: contains } } },
+      { brand: { is: { brandProfile: { is: { companyName: contains } } } } },
+      { brand: { is: { brandProfile: { is: { founderName: contains } } } } },
+      { brand: { is: { organiserProfile: { is: { orgName: contains } } } } },
+      { brand: { is: { organiserProfile: { is: { contactName: contains } } } } },
+    ];
+  }
+
+  return where;
+}
+
+function applicationWhere(input: ListAdminApplicationsInput): Prisma.ApplicationWhereInput {
+  const where: Prisma.ApplicationWhereInput = {};
+  if (input.status) where.status = input.status as AppStatus;
+
+  const term = input.search?.trim();
+  if (term) {
+    const contains = { contains: term, mode: "insensitive" as const };
+    where.OR = [
+      { message: contains },
+      { creator: { is: { email: contains } } },
+      { creator: { is: { creatorProfile: { is: { displayName: contains } } } } },
+      { campaign: { is: { title: contains } } },
+      { campaign: { is: { category: contains } } },
+      { campaign: { is: { location: contains } } },
+      { campaign: { is: { brand: { is: { email: contains } } } } },
+      { campaign: { is: { brand: { is: { brandProfile: { is: { companyName: contains } } } } } } },
+      { campaign: { is: { brand: { is: { organiserProfile: { is: { orgName: contains } } } } } } },
+    ];
+  }
+
+  return where;
+}
+
+function campaignSummary(campaign: any) {
+  return {
+    ...campaign,
+    ownerName: campaignOwnerName(campaign.brand),
+    ownerEmail: campaign.brand?.email || null,
+    applicationsCount: campaign._count?.applications || 0,
+  };
+}
+
+function applicationSummary(application: any) {
+  return {
+    ...application,
+    creatorName: profileDisplayName(application.creator),
+    creatorEmail: application.creator?.email || null,
+    ownerName: campaignOwnerName(application.campaign?.brand),
+    ownerEmail: application.campaign?.brand?.email || null,
+    messagesCount: application._count?.messages || 0,
+  };
+}
+
+export async function listAdminCampaigns(input: ListAdminCampaignsInput) {
+  const where = campaignWhere(input);
+  const [items, total] = await Promise.all([
+    prisma.campaign.findMany({
+      where,
+      skip: (input.page - 1) * input.limit,
+      take: input.limit,
+      orderBy: { createdAt: "desc" },
+      select: adminCampaignSelect,
+    }),
+    prisma.campaign.count({ where }),
+  ]);
+
+  return { items: items.map(campaignSummary), total, page: input.page, limit: input.limit };
+}
+
+export async function getAdminCampaignDetails(campaignId: string) {
+  const campaign = await prisma.campaign.findUnique({
+    where: { id: campaignId },
+    select: adminCampaignDetailSelect,
+  });
+  if (!campaign) throw new Error("Campaign not found");
+  return {
+    ...campaignSummary(campaign),
+    applications: campaign.applications.map(applicationSummary),
+  };
+}
+
+export async function updateCampaignStatus(campaignId: string, input: UpdateCampaignStatusInput) {
+  const campaign = await prisma.campaign.update({
+    where: { id: campaignId },
+    data: { status: input.status as CampaignStatus },
+    select: adminCampaignSelect,
+  });
+  return campaignSummary(campaign);
+}
+
+export async function listAdminApplications(input: ListAdminApplicationsInput) {
+  const where = applicationWhere(input);
+  const [items, total] = await Promise.all([
+    prisma.application.findMany({
+      where,
+      skip: (input.page - 1) * input.limit,
+      take: input.limit,
+      orderBy: { appliedAt: "desc" },
+      select: adminApplicationSelect,
+    }),
+    prisma.application.count({ where }),
+  ]);
+
+  return { items: items.map(applicationSummary), total, page: input.page, limit: input.limit };
+}
+
+export async function getAdminApplicationDetails(applicationId: string) {
+  const application = await prisma.application.findUnique({
+    where: { id: applicationId },
+    select: adminApplicationSelect,
+  });
+  if (!application) throw new Error("Application not found");
+  return applicationSummary(application);
+}
+
+export async function updateApplicationStatus(applicationId: string, input: UpdateApplicationStatusInput) {
+  const application = await prisma.application.findUnique({
+    where: { id: applicationId },
+    include: { campaign: true },
+  });
+  if (!application) throw new Error("Application not found");
+
+  const status = input.status as AppStatus;
+  if (status === "ACCEPTED" && application.status !== "ACCEPTED") {
+    const acceptedCount = await prisma.application.count({
+      where: { campaignId: application.campaignId, status: "ACCEPTED" },
+    });
+    if (acceptedCount >= application.campaign.totalSlots) throw new Error("No slots left");
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.application.update({
+      where: { id: applicationId },
+      data: { status },
+    });
+
+    const acceptedCount = await tx.application.count({
+      where: { campaignId: application.campaignId, status: "ACCEPTED" },
+    });
+    await tx.campaign.update({
+      where: { id: application.campaignId },
+      data: { filledSlots: Math.min(acceptedCount, application.campaign.totalSlots) },
+    });
+
+    if (application.status !== status) {
+      await tx.notification.create({
+        data: {
+          userId: application.creatorId,
+          type: "application_status_updated",
+          title: `Application ${status.toLowerCase()}`,
+          body: `Your application for ${application.campaign.title} was ${status.toLowerCase()} by SynkSpace admin.`,
+        },
+      });
+    }
+  });
+
+  return getAdminApplicationDetails(applicationId);
 }
 
 export async function listDisputes() {

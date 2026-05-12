@@ -9,6 +9,7 @@ export type AuthErrorCode =
   | "AUTH_USER_NOT_FOUND"
   | "AUTH_INVALID_CREDENTIALS"
   | "AUTH_PASSWORD_SETUP_REQUIRED"
+  | "AUTH_USER_SUSPENDED"
   | "AUTH_SERVER_ERROR";
 
 export class AuthServiceError extends Error {
@@ -28,6 +29,8 @@ export type RegisterUserInput = {
 export type LoginUserInput = {
   email: string;
   password: string;
+  ip?: string;
+  userAgent?: string;
 };
 
 export type CompleteInviteInput = {
@@ -46,6 +49,11 @@ const ACCESS_EXPIRES_IN_SEC = 60 * 60 * 8;
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
+}
+
+function truncateAuditValue(value?: string, maxLength = 500): string | undefined {
+  if (!value) return undefined;
+  return value.length > maxLength ? value.slice(0, maxLength) : value;
 }
 
 function isNonEmptyString(v: unknown): v is string {
@@ -89,6 +97,28 @@ function signAccessToken(user: { id: string; email: string; role: string }) {
     env.JWT_REFRESH_SECRET,
     { algorithm: "HS256", expiresIn: ACCESS_EXPIRES_IN_SEC }
   );
+}
+
+async function recordLoginEvent(input: {
+  userId?: string;
+  email: string;
+  success: boolean;
+  failureReason?: AuthErrorCode;
+  ip?: string;
+  userAgent?: string;
+}) {
+  await prisma.loginEvent
+    .create({
+      data: {
+        userId: input.userId,
+        email: input.email,
+        success: input.success,
+        failureReason: input.failureReason,
+        ip: truncateAuditValue(input.ip, 120),
+        userAgent: truncateAuditValue(input.userAgent, 500),
+      },
+    })
+    .catch(() => undefined);
 }
 
 export function verifyAccessToken(token: string): { id: string; email: string; role: string } {
@@ -139,12 +169,27 @@ export async function loginUser(input: LoginUserInput): Promise<{ accessToken: s
   }
 
   const email = normalizeEmail(input.email);
-  const user = await prisma.user.findUnique({ where: { email }, select: { id: true, email: true, role: true, passwordHash: true } });
-  if (!user) throw new AuthServiceError("AUTH_USER_NOT_FOUND");
-  if (user.passwordHash === TEAM_INVITE_PLACEHOLDER_PASSWORD) throw new AuthServiceError("AUTH_PASSWORD_SETUP_REQUIRED");
-  if (!verifyPassword(input.password, user.passwordHash)) throw new AuthServiceError("AUTH_INVALID_CREDENTIALS");
+  const auditContext = { email, ip: input.ip, userAgent: input.userAgent };
+  const user = await prisma.user.findUnique({ where: { email }, select: { id: true, email: true, role: true, status: true, passwordHash: true } });
+  if (!user) {
+    await recordLoginEvent({ ...auditContext, success: false, failureReason: "AUTH_USER_NOT_FOUND" });
+    throw new AuthServiceError("AUTH_USER_NOT_FOUND");
+  }
+  if (user.status === "SUSPENDED") {
+    await recordLoginEvent({ ...auditContext, userId: user.id, success: false, failureReason: "AUTH_USER_SUSPENDED" });
+    throw new AuthServiceError("AUTH_USER_SUSPENDED");
+  }
+  if (user.passwordHash === TEAM_INVITE_PLACEHOLDER_PASSWORD) {
+    await recordLoginEvent({ ...auditContext, userId: user.id, success: false, failureReason: "AUTH_PASSWORD_SETUP_REQUIRED" });
+    throw new AuthServiceError("AUTH_PASSWORD_SETUP_REQUIRED");
+  }
+  if (!verifyPassword(input.password, user.passwordHash)) {
+    await recordLoginEvent({ ...auditContext, userId: user.id, success: false, failureReason: "AUTH_INVALID_CREDENTIALS" });
+    throw new AuthServiceError("AUTH_INVALID_CREDENTIALS");
+  }
 
   const safeUser = { id: user.id, role: user.role, email: user.email };
+  await recordLoginEvent({ ...auditContext, userId: user.id, success: true });
   return { accessToken: signAccessToken(safeUser), expiresIn: ACCESS_EXPIRES_IN_SEC, user: safeUser };
 }
 
@@ -179,7 +224,8 @@ export async function completeInvite(input: CompleteInviteInput): Promise<{ acce
 
 export async function getCurrentUser(accessToken: string): Promise<{ user: { id: string; role: string; email: string } }> {
   const decoded = verifyAccessToken(accessToken);
-  const user = await prisma.user.findUnique({ where: { id: decoded.id }, select: { id: true, role: true, email: true } });
+  const user = await prisma.user.findUnique({ where: { id: decoded.id }, select: { id: true, role: true, email: true, status: true } });
   if (!user) throw new AuthServiceError("AUTH_USER_NOT_FOUND");
+  if (user.status === "SUSPENDED") throw new AuthServiceError("AUTH_USER_SUSPENDED");
   return { user };
 }

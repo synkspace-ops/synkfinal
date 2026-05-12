@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "postinstall": "prisma generate",
-    "build": "prisma generate && tsc",
+    "build": "tsc",
     "dev": "tsx watch src/server.ts",
     "dev:all": "concurrently -n api,web -c blue,magenta \"npm run dev\" \"npm run dev --prefix frontend\"",
     "env:local": "node scripts/write-local-env.mjs",

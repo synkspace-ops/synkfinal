@@ -3,9 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import {
   Activity,
   BarChart3,
+  Ban,
   Building2,
   CalendarDays,
   ChevronRight,
+  CheckCircle2,
+  ClipboardList,
   Eye,
   FileText,
   Globe2,
@@ -17,6 +20,7 @@ import {
   Search,
   ShieldCheck,
   UserCheck,
+  UserCog,
   UserPlus,
   Users,
   Wallet,
@@ -37,7 +41,7 @@ import {
   YAxis,
 } from 'recharts';
 import logo from '../../../assets/synkspace-logo.png';
-import { apiGet } from '../../lib/api';
+import { apiGet, apiPut } from '../../lib/api';
 import { clearAuthSession } from '../../lib/auth';
 
 const roleColors = ['#0f172a', '#2563eb', '#0891b2', '#f59e0b'];
@@ -50,6 +54,9 @@ const statusColors = {
 const navItems = [
   { id: 'overview', icon: BarChart3, label: 'Overview' },
   { id: 'registrations', icon: Users, label: 'Registrations' },
+  { id: 'campaigns', icon: Megaphone, label: 'Campaigns' },
+  { id: 'applications', icon: ClipboardList, label: 'Applications' },
+  { id: 'user-management', icon: UserCog, label: 'User Management' },
   { id: 'traffic', icon: Globe2, label: 'Traffic' },
   { id: 'messages', icon: MessageSquare, label: 'Messages' },
   { id: 'audit', icon: ShieldCheck, label: 'Audit' },
@@ -59,6 +66,37 @@ const registrationRoles = [
   { id: 'CREATOR', label: 'Content Creators', countKey: 'creators' },
   { id: 'BRAND', label: 'Brands', countKey: 'brands' },
   { id: 'ORGANISER', label: 'Event Organisers', countKey: 'organisers' },
+];
+
+const userRoles = [
+  { id: '', label: 'All roles' },
+  { id: 'CREATOR', label: 'Creators' },
+  { id: 'BRAND', label: 'Brands' },
+  { id: 'ORGANISER', label: 'Event Organisers' },
+  { id: 'ADMIN', label: 'Admins' },
+];
+
+const accountStatuses = [
+  { id: '', label: 'All statuses' },
+  { id: 'PENDING', label: 'Pending' },
+  { id: 'VERIFIED', label: 'Active' },
+  { id: 'SUSPENDED', label: 'Blocked' },
+];
+
+const campaignStatuses = [
+  { id: '', label: 'All campaigns' },
+  { id: 'DRAFT', label: 'Draft' },
+  { id: 'ACTIVE', label: 'Active' },
+  { id: 'CLOSED', label: 'Closed' },
+  { id: 'COMPLETED', label: 'Completed' },
+];
+
+const applicationStatuses = [
+  { id: '', label: 'All applications' },
+  { id: 'APPLIED', label: 'Applied' },
+  { id: 'SHORTLISTED', label: 'Shortlisted' },
+  { id: 'ACCEPTED', label: 'Accepted' },
+  { id: 'REJECTED', label: 'Rejected' },
 ];
 
 function formatNumber(value) {
@@ -105,6 +143,45 @@ function profileSubtitle(item) {
   if (item?.role === 'CREATOR') return [profile.niche, profile.city || profile.state, profile.followerRange].filter(Boolean).join(' • ');
   if (item?.role === 'BRAND') return [profile.industry, profile.location, profile.companySize].filter(Boolean).join(' • ');
   return [profile.eventType, profile.city || profile.state, profile.footfall].filter(Boolean).join(' • ');
+}
+
+function accountStatusLabel(status) {
+  if (status === 'VERIFIED') return 'Active';
+  if (status === 'SUSPENDED') return 'Blocked';
+  return 'Pending';
+}
+
+function statusBadgeClass(status) {
+  if (['ACTIVE', 'VERIFIED', 'ACCEPTED', true].includes(status)) return 'bg-emerald-50 text-emerald-700';
+  if (['SUSPENDED', 'BLOCKED', 'REJECTED', false].includes(status)) return 'bg-red-50 text-red-700';
+  if (['DRAFT', 'PENDING', 'APPLIED', 'SHORTLISTED'].includes(status)) return 'bg-amber-50 text-amber-700';
+  if (['CLOSED', 'COMPLETED'].includes(status)) return 'bg-blue-50 text-blue-700';
+  return 'bg-slate-100 text-slate-700';
+}
+
+function StatusBadge({ status, label }) {
+  return (
+    <span className={`rounded-full px-3 py-1 text-xs font-black uppercase ${statusBadgeClass(status)}`}>
+      {label || accountStatusLabel(status) || status}
+    </span>
+  );
+}
+
+function SelectControl({ value, onChange, options, ariaLabel }) {
+  return (
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      aria-label={ariaLabel}
+      className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition focus:border-slate-950"
+    >
+      {options.map((option) => (
+        <option key={option.id || 'all'} value={option.id}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  );
 }
 
 function StatCard({ icon: Icon, label, value, hint }) {
@@ -163,7 +240,7 @@ function DetailGrid({ data }) {
   );
 }
 
-function ProfileDetailsDrawer({ detail, loading, error, onClose }) {
+function ProfileDetailsDrawer({ detail, loading, error, onClose, onUpdateUserStatus, statusUpdating }) {
   if (!detail && !loading && !error) return null;
 
   return (
@@ -208,11 +285,47 @@ function ProfileDetailsDrawer({ detail, loading, error, onClose }) {
                     </p>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <span className="rounded-full bg-slate-950 px-3 py-1 text-xs font-black uppercase text-white">{detail.role}</span>
-                      <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-black uppercase text-emerald-700">{detail.status}</span>
+                      <StatusBadge status={detail.status} />
                       <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-black uppercase text-blue-700">
                         {detail.emailVerified ? 'Email verified' : 'Email pending'}
                       </span>
                     </div>
+                    {onUpdateUserStatus ? (
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {detail.status !== 'VERIFIED' ? (
+                          <button
+                            type="button"
+                            disabled={statusUpdating}
+                            onClick={() => onUpdateUserStatus(detail.id, 'VERIFIED')}
+                            className="inline-flex h-10 items-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-black text-white transition hover:bg-emerald-700 disabled:opacity-60"
+                          >
+                            <CheckCircle2 className="h-4 w-4" />
+                            Set active
+                          </button>
+                        ) : null}
+                        {detail.status !== 'SUSPENDED' ? (
+                          <button
+                            type="button"
+                            disabled={statusUpdating || detail.role === 'ADMIN'}
+                            onClick={() => onUpdateUserStatus(detail.id, 'SUSPENDED')}
+                            className="inline-flex h-10 items-center gap-2 rounded-xl bg-red-600 px-4 text-sm font-black text-white transition hover:bg-red-700 disabled:opacity-60"
+                          >
+                            <Ban className="h-4 w-4" />
+                            Block user
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={statusUpdating}
+                            onClick={() => onUpdateUserStatus(detail.id, 'VERIFIED')}
+                            className="inline-flex h-10 items-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-black text-white transition hover:bg-slate-800 disabled:opacity-60"
+                          >
+                            <CheckCircle2 className="h-4 w-4" />
+                            Restore access
+                          </button>
+                        )}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               </section>
@@ -224,6 +337,7 @@ function ProfileDetailsDrawer({ detail, loading, error, onClose }) {
                     email: detail.email,
                     role: detail.role,
                     status: detail.status,
+                    currentStatus: detail.currentStatus || accountStatusLabel(detail.status),
                     emailVerified: detail.emailVerified,
                     registeredAt: detail.createdAt,
                     updatedAt: detail.updatedAt,
@@ -233,6 +347,7 @@ function ProfileDetailsDrawer({ detail, loading, error, onClose }) {
                     messagesReceived: detail.counts?.messagesReceived,
                     teamMembers: detail.counts?.ownedTeamMembers,
                     notifications: detail.counts?.notifications,
+                    loginEvents: detail.counts?.loginEvents,
                   }}
                 />
               </Panel>
@@ -246,6 +361,30 @@ function ProfileDetailsDrawer({ detail, loading, error, onClose }) {
                   <DetailGrid data={detail.onboardingProgress} />
                 </Panel>
               ) : null}
+
+              <Panel title="Login History" subtitle="Recent sign-in attempts captured for audit">
+                {detail.loginHistory?.length ? (
+                  <div className="space-y-3">
+                    {detail.loginHistory.map((event) => (
+                      <div key={event.id} className="rounded-xl bg-slate-50 px-4 py-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <StatusBadge status={event.success} label={event.success ? 'Success' : 'Failed'} />
+                              {event.failureReason ? <span className="text-xs font-black uppercase text-slate-400">{event.failureReason}</span> : null}
+                            </div>
+                            <p className="mt-2 break-words text-xs font-semibold text-slate-500">{event.userAgent || 'No user agent recorded'}</p>
+                            {event.ip ? <p className="mt-1 text-xs font-bold text-slate-400">IP {event.ip}</p> : null}
+                          </div>
+                          <p className="shrink-0 text-xs font-bold text-slate-500">{formatDate(event.createdAt)}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState label="No login attempts recorded yet." />
+                )}
+              </Panel>
 
               {detail.campaigns?.length ? (
                 <Panel title="Campaigns" subtitle="Campaigns created by this brand or organiser">
@@ -303,6 +442,44 @@ function ProfileDetailsDrawer({ detail, loading, error, onClose }) {
   );
 }
 
+function EntityDetailsDrawer({ title, subtitle, loading, error, onClose, children }) {
+  if (!title && !loading && !error) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm">
+      <div className="ml-auto flex h-full w-full max-w-3xl flex-col bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+          <div className="min-w-0">
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">Admin Details</p>
+            <h2 className="mt-1 truncate text-2xl font-black text-slate-950">{title || 'Loading details'}</h2>
+            {subtitle ? <p className="mt-1 truncate text-sm font-semibold text-slate-500">{subtitle}</p> : null}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50"
+            aria-label="Close details"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-6 py-5">
+          {loading ? (
+            <div className="flex min-h-64 items-center justify-center gap-3 text-sm font-bold text-slate-500">
+              <RefreshCw className="h-5 w-5 animate-spin" />
+              Loading details
+            </div>
+          ) : error ? (
+            <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-bold text-red-700">{error}</div>
+          ) : (
+            <div className="space-y-5">{children}</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminDashboard() {
   const navigate = useNavigate();
   const [activeSection, setActiveSection] = useState('overview');
@@ -319,6 +496,32 @@ export default function AdminDashboard() {
   const [profileDetail, setProfileDetail] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState('');
+  const [statusUpdating, setStatusUpdating] = useState(false);
+  const [campaigns, setCampaigns] = useState({ items: [], total: 0, page: 1, limit: 25 });
+  const [campaignStatus, setCampaignStatus] = useState('ACTIVE');
+  const [campaignSearch, setCampaignSearch] = useState('');
+  const [submittedCampaignSearch, setSubmittedCampaignSearch] = useState('');
+  const [campaignsLoading, setCampaignsLoading] = useState(false);
+  const [campaignsError, setCampaignsError] = useState('');
+  const [selectedCampaign, setSelectedCampaign] = useState(null);
+  const [campaignDetailLoading, setCampaignDetailLoading] = useState(false);
+  const [campaignDetailError, setCampaignDetailError] = useState('');
+  const [applications, setApplications] = useState({ items: [], total: 0, page: 1, limit: 25 });
+  const [applicationStatus, setApplicationStatus] = useState('');
+  const [applicationSearch, setApplicationSearch] = useState('');
+  const [submittedApplicationSearch, setSubmittedApplicationSearch] = useState('');
+  const [applicationsLoading, setApplicationsLoading] = useState(false);
+  const [applicationsError, setApplicationsError] = useState('');
+  const [selectedApplication, setSelectedApplication] = useState(null);
+  const [applicationDetailLoading, setApplicationDetailLoading] = useState(false);
+  const [applicationDetailError, setApplicationDetailError] = useState('');
+  const [managedUsers, setManagedUsers] = useState({ items: [], total: 0, page: 1, limit: 25 });
+  const [managedRole, setManagedRole] = useState('');
+  const [managedStatus, setManagedStatus] = useState('');
+  const [managedSearch, setManagedSearch] = useState('');
+  const [submittedManagedSearch, setSubmittedManagedSearch] = useState('');
+  const [managedUsersLoading, setManagedUsersLoading] = useState(false);
+  const [managedUsersError, setManagedUsersError] = useState('');
 
   const loadOverview = async ({ silent = false } = {}) => {
     if (silent) {
@@ -358,17 +561,160 @@ export default function AdminDashboard() {
     }
   };
 
-  const openProfileDetails = async (userId) => {
+  const openProfileDetails = async (userId, source = 'registrations') => {
     setProfileDetail(null);
     setProfileError('');
     setProfileLoading(true);
     try {
-      const response = await apiGet(`/api/admin/registrations/${userId}`);
+      const endpoint = source === 'user-management' ? `/api/admin/user-management/${userId}` : `/api/admin/registrations/${userId}`;
+      const response = await apiGet(endpoint);
       setProfileDetail(response?.data || null);
     } catch (detailsError) {
       setProfileError(detailsError?.message || 'Could not load profile details.');
     } finally {
       setProfileLoading(false);
+    }
+  };
+
+  const loadCampaigns = async () => {
+    setCampaignsLoading(true);
+    setCampaignsError('');
+    try {
+      const params = new URLSearchParams({
+        page: String(campaigns.page || 1),
+        limit: String(campaigns.limit || 25),
+      });
+      if (campaignStatus) params.set('status', campaignStatus);
+      if (submittedCampaignSearch.trim()) params.set('search', submittedCampaignSearch.trim());
+      const response = await apiGet(`/api/admin/campaigns?${params.toString()}`);
+      setCampaigns(response?.data || { items: [], total: 0, page: 1, limit: 25 });
+    } catch (campaignError) {
+      setCampaignsError(campaignError?.message || 'Could not load campaigns.');
+    } finally {
+      setCampaignsLoading(false);
+    }
+  };
+
+  const openCampaignDetails = async (campaignId) => {
+    setSelectedCampaign(null);
+    setCampaignDetailError('');
+    setCampaignDetailLoading(true);
+    try {
+      const response = await apiGet(`/api/admin/campaigns/${campaignId}`);
+      setSelectedCampaign(response?.data || null);
+    } catch (campaignError) {
+      setCampaignDetailError(campaignError?.message || 'Could not load campaign details.');
+    } finally {
+      setCampaignDetailLoading(false);
+    }
+  };
+
+  const updateCampaignStatus = async (campaignId, status) => {
+    setStatusUpdating(true);
+    try {
+      const response = await apiPut(`/api/admin/campaigns/${campaignId}/status`, { status });
+      const updated = response?.data;
+      if (updated) {
+        setCampaigns((prev) => ({ ...prev, items: prev.items.map((item) => (item.id === updated.id ? updated : item)) }));
+        setSelectedCampaign((prev) => (prev?.id === updated.id ? { ...prev, ...updated } : prev));
+      }
+      await loadOverview({ silent: true });
+    } catch (campaignError) {
+      setCampaignsError(campaignError?.message || 'Could not update campaign status.');
+    } finally {
+      setStatusUpdating(false);
+    }
+  };
+
+  const loadApplications = async () => {
+    setApplicationsLoading(true);
+    setApplicationsError('');
+    try {
+      const params = new URLSearchParams({
+        page: String(applications.page || 1),
+        limit: String(applications.limit || 25),
+      });
+      if (applicationStatus) params.set('status', applicationStatus);
+      if (submittedApplicationSearch.trim()) params.set('search', submittedApplicationSearch.trim());
+      const response = await apiGet(`/api/admin/applications?${params.toString()}`);
+      setApplications(response?.data || { items: [], total: 0, page: 1, limit: 25 });
+    } catch (applicationError) {
+      setApplicationsError(applicationError?.message || 'Could not load applications.');
+    } finally {
+      setApplicationsLoading(false);
+    }
+  };
+
+  const openApplicationDetails = async (applicationId) => {
+    setSelectedApplication(null);
+    setApplicationDetailError('');
+    setApplicationDetailLoading(true);
+    try {
+      const response = await apiGet(`/api/admin/applications/${applicationId}`);
+      setSelectedApplication(response?.data || null);
+    } catch (applicationError) {
+      setApplicationDetailError(applicationError?.message || 'Could not load application details.');
+    } finally {
+      setApplicationDetailLoading(false);
+    }
+  };
+
+  const updateApplicationStatus = async (applicationId, status) => {
+    setStatusUpdating(true);
+    try {
+      const response = await apiPut(`/api/admin/applications/${applicationId}/status`, { status });
+      const updated = response?.data;
+      if (updated) {
+        setApplications((prev) => ({ ...prev, items: prev.items.map((item) => (item.id === updated.id ? updated : item)) }));
+        setSelectedApplication((prev) => (prev?.id === updated.id ? updated : prev));
+      }
+      await Promise.all([loadOverview({ silent: true }), loadCampaigns()]);
+    } catch (applicationError) {
+      setApplicationsError(applicationError?.message || 'Could not update application status.');
+    } finally {
+      setStatusUpdating(false);
+    }
+  };
+
+  const loadManagedUsers = async () => {
+    setManagedUsersLoading(true);
+    setManagedUsersError('');
+    try {
+      const params = new URLSearchParams({
+        page: String(managedUsers.page || 1),
+        limit: String(managedUsers.limit || 25),
+      });
+      if (managedRole) params.set('role', managedRole);
+      if (managedStatus) params.set('status', managedStatus);
+      if (submittedManagedSearch.trim()) params.set('search', submittedManagedSearch.trim());
+      const response = await apiGet(`/api/admin/user-management?${params.toString()}`);
+      setManagedUsers(response?.data || { items: [], total: 0, page: 1, limit: 25 });
+    } catch (managedError) {
+      setManagedUsersError(managedError?.message || 'Could not load users.');
+    } finally {
+      setManagedUsersLoading(false);
+    }
+  };
+
+  const updateUserStatus = async (userId, status) => {
+    setStatusUpdating(true);
+    setProfileError('');
+    setManagedUsersError('');
+    try {
+      const response = await apiPut(`/api/admin/user-management/${userId}/status`, { status });
+      const updated = response?.data;
+      if (updated) {
+        setManagedUsers((prev) => ({ ...prev, items: prev.items.map((item) => (item.id === updated.id ? updated : item)) }));
+        setRegistrations((prev) => ({ ...prev, items: prev.items.map((item) => (item.id === updated.id ? updated : item)) }));
+        setProfileDetail((prev) => (prev?.id === updated.id ? { ...prev, ...updated } : prev));
+      }
+      await loadOverview({ silent: true });
+    } catch (statusError) {
+      const message = statusError?.message || 'Could not update user status.';
+      setManagedUsersError(message);
+      setProfileError(message);
+    } finally {
+      setStatusUpdating(false);
     }
   };
 
@@ -379,6 +725,18 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (activeSection === 'registrations') loadRegistrations();
   }, [activeSection, registrationRole, registrations.page, submittedSearch]);
+
+  useEffect(() => {
+    if (activeSection === 'campaigns') loadCampaigns();
+  }, [activeSection, campaignStatus, campaigns.page, submittedCampaignSearch]);
+
+  useEffect(() => {
+    if (activeSection === 'applications') loadApplications();
+  }, [activeSection, applicationStatus, applications.page, submittedApplicationSearch]);
+
+  useEffect(() => {
+    if (activeSection === 'user-management') loadManagedUsers();
+  }, [activeSection, managedRole, managedStatus, managedUsers.page, submittedManagedSearch]);
 
   const totals = overview?.totals || {};
   const activeNav = navItems.find((item) => item.id === activeSection) || navItems[0];
@@ -419,6 +777,24 @@ export default function AdminDashboard() {
     event.preventDefault();
     setRegistrations((prev) => ({ ...prev, page: 1 }));
     setSubmittedSearch(registrationSearch);
+  };
+
+  const handleCampaignSearch = (event) => {
+    event.preventDefault();
+    setCampaigns((prev) => ({ ...prev, page: 1 }));
+    setSubmittedCampaignSearch(campaignSearch);
+  };
+
+  const handleApplicationSearch = (event) => {
+    event.preventDefault();
+    setApplications((prev) => ({ ...prev, page: 1 }));
+    setSubmittedApplicationSearch(applicationSearch);
+  };
+
+  const handleManagedUserSearch = (event) => {
+    event.preventDefault();
+    setManagedUsers((prev) => ({ ...prev, page: 1 }));
+    setSubmittedManagedSearch(managedSearch);
   };
 
   const renderOverview = () => (
@@ -723,6 +1099,288 @@ export default function AdminDashboard() {
     </div>
   );
 
+  const renderCampaigns = () => (
+    <div className="space-y-6">
+      <section className="grid gap-4 md:grid-cols-3">
+        <StatCard icon={Megaphone} label="Campaigns" value={formatNumber(totals.campaigns)} hint={`${formatNumber(totals.activeCampaigns)} active`} />
+        <StatCard icon={ClipboardList} label="Applications" value={formatNumber(totals.applications)} hint={`${formatNumber(totals.acceptedApplications)} accepted`} />
+        <StatCard icon={Activity} label="Loaded Campaigns" value={formatNumber(campaigns.total)} hint="Matching current filters" />
+      </section>
+
+      <Panel
+        title="Campaign Control"
+        subtitle="Review active campaigns, audit details, and update lifecycle status"
+        action={
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <SelectControl
+              value={campaignStatus}
+              onChange={(value) => {
+                setCampaignStatus(value);
+                setCampaigns((prev) => ({ ...prev, page: 1 }));
+              }}
+              options={campaignStatuses}
+              ariaLabel="Campaign status filter"
+            />
+            <form onSubmit={handleCampaignSearch} className="flex w-full max-w-sm items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={campaignSearch}
+                  onChange={(event) => setCampaignSearch(event.target.value)}
+                  placeholder="Search campaigns"
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm font-semibold outline-none transition focus:border-slate-950"
+                />
+              </div>
+              <button type="submit" className="h-10 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white transition hover:bg-slate-800">
+                Search
+              </button>
+            </form>
+          </div>
+        }
+      >
+        {campaignsError ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{campaignsError}</div>
+        ) : campaignsLoading ? (
+          <div className="flex min-h-64 items-center justify-center gap-3 text-sm font-bold text-slate-500">
+            <RefreshCw className="h-5 w-5 animate-spin" />
+            Loading campaigns
+          </div>
+        ) : campaigns.items.length ? (
+          <div className="overflow-hidden rounded-2xl border border-slate-200">
+            {campaigns.items.map((campaign) => (
+              <div key={campaign.id} className="flex flex-col gap-4 border-b border-slate-100 px-4 py-4 last:border-b-0 md:flex-row md:items-center">
+                <button type="button" onClick={() => openCampaignDetails(campaign.id)} className="min-w-0 flex-1 text-left">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="truncate text-sm font-black text-slate-950">{campaign.title}</p>
+                    <StatusBadge status={campaign.status} label={campaign.status} />
+                  </div>
+                  <p className="mt-1 truncate text-xs font-semibold text-slate-500">
+                    {campaign.ownerName} • {campaign.category} • {campaign.location}
+                  </p>
+                  <p className="mt-1 text-xs font-bold text-slate-400">
+                    {formatCurrency(campaign.budgetMin)} - {formatCurrency(campaign.budgetMax)} • {formatNumber(campaign.applicationsCount)} applications • {campaign.filledSlots}/{campaign.totalSlots} slots
+                  </p>
+                </button>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  <SelectControl
+                    value={campaign.status}
+                    onChange={(value) => updateCampaignStatus(campaign.id, value)}
+                    options={campaignStatuses.filter((status) => status.id)}
+                    ariaLabel={`Update ${campaign.title} status`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => openCampaignDetails(campaign.id)}
+                    className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+                  >
+                    Details
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyState label="No campaigns found for this filter." />
+        )}
+      </Panel>
+    </div>
+  );
+
+  const renderApplications = () => (
+    <div className="space-y-6">
+      <section className="grid gap-4 md:grid-cols-3">
+        <StatCard icon={ClipboardList} label="Applications" value={formatNumber(totals.applications)} hint="Total creator applications" />
+        <StatCard icon={CheckCircle2} label="Accepted" value={formatNumber(totals.acceptedApplications)} hint="Accepted applications" />
+        <StatCard icon={Activity} label="Loaded Applications" value={formatNumber(applications.total)} hint="Matching current filters" />
+      </section>
+
+      <Panel
+        title="Application Review"
+        subtitle="Check proposals, campaign context, messages, contracts, and status"
+        action={
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <SelectControl
+              value={applicationStatus}
+              onChange={(value) => {
+                setApplicationStatus(value);
+                setApplications((prev) => ({ ...prev, page: 1 }));
+              }}
+              options={applicationStatuses}
+              ariaLabel="Application status filter"
+            />
+            <form onSubmit={handleApplicationSearch} className="flex w-full max-w-sm items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={applicationSearch}
+                  onChange={(event) => setApplicationSearch(event.target.value)}
+                  placeholder="Search applications"
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm font-semibold outline-none transition focus:border-slate-950"
+                />
+              </div>
+              <button type="submit" className="h-10 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white transition hover:bg-slate-800">
+                Search
+              </button>
+            </form>
+          </div>
+        }
+      >
+        {applicationsError ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{applicationsError}</div>
+        ) : applicationsLoading ? (
+          <div className="flex min-h-64 items-center justify-center gap-3 text-sm font-bold text-slate-500">
+            <RefreshCw className="h-5 w-5 animate-spin" />
+            Loading applications
+          </div>
+        ) : applications.items.length ? (
+          <div className="overflow-hidden rounded-2xl border border-slate-200">
+            {applications.items.map((application) => (
+              <div key={application.id} className="flex flex-col gap-4 border-b border-slate-100 px-4 py-4 last:border-b-0 md:flex-row md:items-center">
+                <button type="button" onClick={() => openApplicationDetails(application.id)} className="min-w-0 flex-1 text-left">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="truncate text-sm font-black text-slate-950">{application.creatorName}</p>
+                    <StatusBadge status={application.status} label={application.status} />
+                  </div>
+                  <p className="mt-1 truncate text-xs font-semibold text-slate-500">
+                    {application.campaign?.title || 'Campaign'} • {application.ownerName}
+                  </p>
+                  <p className="mt-1 text-xs font-bold text-slate-400">
+                    {formatCurrency(application.proposedRate)} • {formatNumber(application.messagesCount)} messages • Applied {formatDate(application.appliedAt)}
+                  </p>
+                </button>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  <SelectControl
+                    value={application.status}
+                    onChange={(value) => updateApplicationStatus(application.id, value)}
+                    options={applicationStatuses.filter((status) => status.id)}
+                    ariaLabel={`Update application status for ${application.creatorName}`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => openApplicationDetails(application.id)}
+                    className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+                  >
+                    Details
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyState label="No applications found for this filter." />
+        )}
+      </Panel>
+    </div>
+  );
+
+  const renderUserManagement = () => (
+    <div className="space-y-6">
+      <section className="grid gap-4 md:grid-cols-3">
+        <StatCard icon={Users} label="Registered Users" value={formatNumber(totals.users)} hint="All platform accounts" />
+        <StatCard icon={CheckCircle2} label="Active Accounts" value={formatNumber(statusBreakdown.find((item) => item.name === 'Verified')?.value)} hint="Allowed to sign in" />
+        <StatCard icon={Ban} label="Blocked Accounts" value={formatNumber(statusBreakdown.find((item) => item.name === 'Suspended')?.value)} hint="Prevented from sign-in and API access" />
+      </section>
+
+      <Panel
+        title="User Management"
+        subtitle={`${formatNumber(managedUsers.total)} users matching filters`}
+        action={
+          <div className="flex flex-col gap-2 xl:flex-row">
+            <SelectControl
+              value={managedRole}
+              onChange={(value) => {
+                setManagedRole(value);
+                setManagedUsers((prev) => ({ ...prev, page: 1 }));
+              }}
+              options={userRoles}
+              ariaLabel="User role filter"
+            />
+            <SelectControl
+              value={managedStatus}
+              onChange={(value) => {
+                setManagedStatus(value);
+                setManagedUsers((prev) => ({ ...prev, page: 1 }));
+              }}
+              options={accountStatuses}
+              ariaLabel="User status filter"
+            />
+            <form onSubmit={handleManagedUserSearch} className="flex w-full max-w-sm items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={managedSearch}
+                  onChange={(event) => setManagedSearch(event.target.value)}
+                  placeholder="Search name, email, phone"
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm font-semibold outline-none transition focus:border-slate-950"
+                />
+              </div>
+              <button type="submit" className="h-10 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white transition hover:bg-slate-800">
+                Search
+              </button>
+            </form>
+          </div>
+        }
+      >
+        {managedUsersError ? (
+          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{managedUsersError}</div>
+        ) : null}
+        {managedUsersLoading ? (
+          <div className="flex min-h-64 items-center justify-center gap-3 text-sm font-bold text-slate-500">
+            <RefreshCw className="h-5 w-5 animate-spin" />
+            Loading users
+          </div>
+        ) : managedUsers.items.length ? (
+          <div className="overflow-hidden rounded-2xl border border-slate-200">
+            {managedUsers.items.map((user) => (
+              <div key={user.id} className="flex flex-col gap-4 border-b border-slate-100 px-4 py-4 last:border-b-0 md:flex-row md:items-center">
+                <button type="button" onClick={() => openProfileDetails(user.id, 'user-management')} className="flex min-w-0 flex-1 items-center gap-4 text-left">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-slate-950 text-sm font-black text-white">
+                    {user.avatarUrl ? <img src={user.avatarUrl} alt={user.name} className="h-full w-full object-cover" /> : user.name?.charAt(0)}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="truncate text-sm font-black text-slate-950">{user.name}</p>
+                      <StatusBadge status={user.status} />
+                    </div>
+                    <p className="mt-1 truncate text-xs font-semibold text-slate-500">{user.email}</p>
+                    <p className="mt-1 truncate text-xs font-semibold text-slate-400">{user.role} • {profileSubtitle(user) || 'Profile details available'}</p>
+                  </div>
+                </button>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => updateUserStatus(user.id, 'VERIFIED')}
+                    disabled={statusUpdating || user.status === 'VERIFIED'}
+                    className="h-10 rounded-xl bg-emerald-600 px-4 text-sm font-black text-white transition hover:bg-emerald-700 disabled:opacity-50"
+                  >
+                    Active
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateUserStatus(user.id, 'SUSPENDED')}
+                    disabled={statusUpdating || user.status === 'SUSPENDED' || user.role === 'ADMIN'}
+                    className="h-10 rounded-xl bg-red-600 px-4 text-sm font-black text-white transition hover:bg-red-700 disabled:opacity-50"
+                  >
+                    Block
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openProfileDetails(user.id, 'user-management')}
+                    className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+                  >
+                    Profile
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyState label="No users found for this filter." />
+        )}
+      </Panel>
+    </div>
+  );
+
   const renderMessages = () => (
     <div className="space-y-6">
       <section className="grid gap-4 md:grid-cols-3">
@@ -760,6 +1418,9 @@ export default function AdminDashboard() {
 
   const renderContent = () => {
     if (activeSection === 'registrations') return renderRegistrations();
+    if (activeSection === 'campaigns') return renderCampaigns();
+    if (activeSection === 'applications') return renderApplications();
+    if (activeSection === 'user-management') return renderUserManagement();
     if (activeSection === 'traffic') return <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(360px,1fr)]">{renderTrafficChart()}{renderTopPages()}</div>;
     if (activeSection === 'messages') return renderMessages();
     if (activeSection === 'audit') return renderAudit();
@@ -839,12 +1500,15 @@ export default function AdminDashboard() {
                 type="button"
                 onClick={() => {
                   if (activeSection === 'registrations') loadRegistrations();
+                  if (activeSection === 'campaigns') loadCampaigns();
+                  if (activeSection === 'applications') loadApplications();
+                  if (activeSection === 'user-management') loadManagedUsers();
                   loadOverview({ silent: true });
                 }}
-                disabled={refreshing || registrationsLoading}
+                disabled={refreshing || registrationsLoading || campaignsLoading || applicationsLoading || managedUsersLoading}
                 className="inline-flex h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 disabled:opacity-60"
               >
-                <RefreshCw className={`h-4 w-4 ${(refreshing || registrationsLoading) ? 'animate-spin' : ''}`} />
+                <RefreshCw className={`h-4 w-4 ${(refreshing || registrationsLoading || campaignsLoading || applicationsLoading || managedUsersLoading) ? 'animate-spin' : ''}`} />
                 Refresh
               </button>
               <button
@@ -892,7 +1556,119 @@ export default function AdminDashboard() {
           setProfileDetail(null);
           setProfileError('');
         }}
+        onUpdateUserStatus={updateUserStatus}
+        statusUpdating={statusUpdating}
       />
+      <EntityDetailsDrawer
+        title={selectedCampaign?.title || (campaignDetailLoading ? 'Loading campaign' : '')}
+        subtitle={selectedCampaign ? `${selectedCampaign.ownerName} • ${selectedCampaign.category}` : ''}
+        loading={campaignDetailLoading}
+        error={campaignDetailError}
+        onClose={() => {
+          setSelectedCampaign(null);
+          setCampaignDetailError('');
+        }}
+      >
+        {selectedCampaign ? (
+          <>
+            <Panel
+              title="Campaign Status"
+              subtitle="Admin control for campaign visibility and lifecycle"
+              action={
+                <SelectControl
+                  value={selectedCampaign.status}
+                  onChange={(value) => updateCampaignStatus(selectedCampaign.id, value)}
+                  options={campaignStatuses.filter((status) => status.id)}
+                  ariaLabel="Update selected campaign status"
+                />
+              }
+            >
+              <DetailGrid
+                data={{
+                  campaignId: selectedCampaign.id,
+                  status: selectedCampaign.status,
+                  owner: selectedCampaign.ownerName,
+                  ownerEmail: selectedCampaign.ownerEmail,
+                  category: selectedCampaign.category,
+                  location: selectedCampaign.location,
+                  budgetMin: formatCurrency(selectedCampaign.budgetMin),
+                  budgetMax: formatCurrency(selectedCampaign.budgetMax),
+                  slots: `${selectedCampaign.filledSlots}/${selectedCampaign.totalSlots}`,
+                  applications: selectedCampaign.applicationsCount,
+                  deadline: selectedCampaign.deadline,
+                  createdAt: selectedCampaign.createdAt,
+                }}
+              />
+            </Panel>
+            <Panel title="Campaign Details" subtitle="Saved campaign fields from the database">
+              <DetailGrid data={selectedCampaign} />
+            </Panel>
+            <Panel title="Applications" subtitle="Applications received for this campaign">
+              {selectedCampaign.applications?.length ? (
+                <div className="space-y-3">
+                  {selectedCampaign.applications.map((application) => (
+                    <div key={application.id} className="rounded-xl bg-slate-50 px-4 py-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-black text-slate-950">{application.creatorName}</p>
+                          <p className="mt-1 text-xs font-semibold text-slate-500">{application.creatorEmail} • {formatCurrency(application.proposedRate)}</p>
+                        </div>
+                        <StatusBadge status={application.status} label={application.status} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState label="No applications for this campaign yet." />
+              )}
+            </Panel>
+          </>
+        ) : null}
+      </EntityDetailsDrawer>
+      <EntityDetailsDrawer
+        title={selectedApplication ? `${selectedApplication.creatorName} application` : (applicationDetailLoading ? 'Loading application' : '')}
+        subtitle={selectedApplication ? selectedApplication.campaign?.title : ''}
+        loading={applicationDetailLoading}
+        error={applicationDetailError}
+        onClose={() => {
+          setSelectedApplication(null);
+          setApplicationDetailError('');
+        }}
+      >
+        {selectedApplication ? (
+          <>
+            <Panel
+              title="Application Status"
+              subtitle="Admin control for campaign applications"
+              action={
+                <SelectControl
+                  value={selectedApplication.status}
+                  onChange={(value) => updateApplicationStatus(selectedApplication.id, value)}
+                  options={applicationStatuses.filter((status) => status.id)}
+                  ariaLabel="Update selected application status"
+                />
+              }
+            >
+              <DetailGrid
+                data={{
+                  applicationId: selectedApplication.id,
+                  status: selectedApplication.status,
+                  creator: selectedApplication.creatorName,
+                  creatorEmail: selectedApplication.creatorEmail,
+                  campaign: selectedApplication.campaign?.title,
+                  owner: selectedApplication.ownerName,
+                  proposedRate: formatCurrency(selectedApplication.proposedRate),
+                  messages: selectedApplication.messagesCount,
+                  appliedAt: selectedApplication.appliedAt,
+                }}
+              />
+            </Panel>
+            <Panel title="Application Details" subtitle="Proposal, campaign, contract, escrow, and deliverable data">
+              <DetailGrid data={selectedApplication} />
+            </Panel>
+          </>
+        ) : null}
+      </EntityDetailsDrawer>
     </div>
   );
 }

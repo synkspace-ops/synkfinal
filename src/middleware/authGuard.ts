@@ -1,5 +1,5 @@
 import { FastifyRequest, FastifyReply } from "fastify";
-import { verifyAccessToken } from "../modules/auth/auth.service.js";
+import { AuthServiceError, getCurrentUser } from "../modules/auth/auth.service.js";
 
 export interface JwtPayload {
   sub: string;
@@ -36,17 +36,18 @@ export async function authGuard(
     return;
   }
   try {
-    const decoded = verifyAccessToken(token);
+    const { user } = await getCurrentUser(token);
     request.user = {
-      id: decoded.id,
-      email: decoded.email,
-      role: decoded.role,
+      id: user.id,
+      email: user.email,
+      role: user.role,
     };
-  } catch {
-    await reply.status(401).send({
+  } catch (err) {
+    const suspended = err instanceof AuthServiceError && err.code === "AUTH_USER_SUSPENDED";
+    await reply.status(suspended ? 403 : 401).send({
       error: "Unauthorized",
-      message: "Invalid or expired token",
-      statusCode: 401,
+      message: suspended ? "Account is suspended" : "Invalid or expired token",
+      statusCode: suspended ? 403 : 401,
     });
   }
 }

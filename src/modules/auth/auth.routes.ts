@@ -38,6 +38,8 @@ export async function authRoutes(app: FastifyInstance, _opts: FastifyPluginOptio
       const result = await authService.loginUser({
         email: typeof body?.email === "string" ? body.email : "",
         password: typeof body?.password === "string" ? body.password : "",
+        ip: request.ip,
+        userAgent: typeof request.headers["user-agent"] === "string" ? request.headers["user-agent"] : "",
       });
       return reply.status(200).send({ success: true, data: result });
     } catch (err) {
@@ -47,9 +49,13 @@ export async function authRoutes(app: FastifyInstance, _opts: FastifyPluginOptio
             ? 400
             : err.code === "AUTH_USER_NOT_FOUND"
               ? 404
-              : err.code === "AUTH_INVALID_CREDENTIALS"
-                ? 401
-                : 500;
+            : err.code === "AUTH_INVALID_CREDENTIALS"
+              ? 401
+              : err.code === "AUTH_PASSWORD_SETUP_REQUIRED"
+                ? 409
+                : err.code === "AUTH_USER_SUSPENDED"
+                  ? 403
+                  : 500;
         return reply.status(status).send({ success: false, error: { code: err.code } });
       }
       request.log.error({ err }, "auth.login unexpected error");
@@ -102,8 +108,10 @@ export async function authRoutes(app: FastifyInstance, _opts: FastifyPluginOptio
             ? 400
             : err.code === "AUTH_USER_NOT_FOUND"
               ? 404
-              : err.code === "AUTH_INVALID_CREDENTIALS"
-                ? 401
+            : err.code === "AUTH_INVALID_CREDENTIALS"
+              ? 401
+              : err.code === "AUTH_USER_SUSPENDED"
+                ? 403
                 : 500;
         return reply.status(status).send({ success: false, error: { code: err.code } });
       }
