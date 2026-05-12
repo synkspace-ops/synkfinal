@@ -86,6 +86,8 @@ type MetricRow = {
 
 type DailyTrafficRow = { date: string; visits: number };
 type DailyRegistrationRow = { date: string; registrations: number };
+type MonthlyTrafficRow = { month: string; visits: number };
+type MonthlyRegistrationRow = { month: string; registrations: number };
 type RoleCountRow = { role: Role; value?: number; _count?: true | { _all?: number } };
 type StatusCountRow = { status: Status; value?: number; _count?: true | { _all?: number } };
 type TopPathRow = { path: string; visits: number };
@@ -120,6 +122,38 @@ function buildDailyRows(days: number, trafficRows: DailyTrafficRow[], userRows: 
   }
   for (const user of userRows) {
     const row = byDate.get(dayKey(user.date));
+    if (row) row.registrations += toNumber(user.registrations);
+  }
+
+  return rows;
+}
+
+function monthKey(value: Date | string) {
+  if (typeof value === "string") return value.slice(0, 7);
+  return value.toISOString().slice(0, 7);
+}
+
+function buildMonthlyRows(months: number, trafficRows: MonthlyTrafficRow[], userRows: MonthlyRegistrationRow[]) {
+  const today = startOfDay();
+  const start = new Date(today.getFullYear(), today.getMonth() - (months - 1), 1);
+  const rows = Array.from({ length: months }, (_, index) => {
+    const date = new Date(start.getFullYear(), start.getMonth() + index, 1);
+    return {
+      month: monthKey(date),
+      label: date.toLocaleDateString("en-IN", { month: "short" }),
+      name: date.toLocaleDateString("en-IN", { month: "long", year: "numeric" }),
+      visits: 0,
+      registrations: 0,
+    };
+  });
+  const byMonth = new Map(rows.map((row) => [row.month, row]));
+
+  for (const event of trafficRows) {
+    const row = byMonth.get(monthKey(event.month));
+    if (row) row.visits += toNumber(event.visits);
+  }
+  for (const user of userRows) {
+    const row = byMonth.get(monthKey(user.month));
     if (row) row.registrations += toNumber(user.registrations);
   }
 
@@ -203,6 +237,7 @@ export async function getAdminOverview() {
   const today = startOfDay();
   const sevenDaysAgo = addDays(today, -6);
   const thirtyDaysAgo = addDays(today, -29);
+  const twelveMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 11, 1);
 
   const [
     metricRows,
@@ -210,6 +245,8 @@ export async function getAdminOverview() {
     statusRows,
     trafficRows,
     userRows,
+    monthlyTrafficRows,
+    monthlyUserRows,
     topPathRows,
     recentUsers,
     recentMessages,
@@ -264,6 +301,20 @@ export async function getAdminOverview() {
       WHERE "createdAt" >= ${thirtyDaysAgo}
       GROUP BY DATE("createdAt")
       ORDER BY DATE("createdAt") ASC
+    `),
+    () => prisma.$queryRaw<MonthlyTrafficRow[]>(Prisma.sql`
+      SELECT TO_CHAR(DATE_TRUNC('month', "createdAt"), 'YYYY-MM') AS "month", COUNT(*)::int AS "visits"
+      FROM "TrafficEvent"
+      WHERE "createdAt" >= ${twelveMonthsAgo}
+      GROUP BY DATE_TRUNC('month', "createdAt")
+      ORDER BY DATE_TRUNC('month', "createdAt") ASC
+    `),
+    () => prisma.$queryRaw<MonthlyRegistrationRow[]>(Prisma.sql`
+      SELECT TO_CHAR(DATE_TRUNC('month', "createdAt"), 'YYYY-MM') AS "month", COUNT(*)::int AS "registrations"
+      FROM "User"
+      WHERE "createdAt" >= ${twelveMonthsAgo}
+      GROUP BY DATE_TRUNC('month', "createdAt")
+      ORDER BY DATE_TRUNC('month', "createdAt") ASC
     `),
     () => prisma.$queryRaw<TopPathRow[]>(Prisma.sql`
       SELECT "path", COUNT(*)::int AS "visits"
@@ -335,6 +386,7 @@ export async function getAdminOverview() {
   const roles = countByRole(roleRows);
   const statuses = countByStatus(statusRows);
   const daily = buildDailyRows(30, trafficRows, userRows);
+  const monthly = buildMonthlyRows(12, monthlyTrafficRows, monthlyUserRows);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -376,6 +428,7 @@ export async function getAdminOverview() {
       { name: "Suspended", value: statuses.SUSPENDED },
     ],
     daily,
+    monthly,
     topPaths: topPathRows.map((row) => ({
       path: row.path,
       visits: toNumber(row.visits),

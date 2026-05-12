@@ -182,6 +182,33 @@ function SelectControl({ value, onChange, options, ariaLabel }) {
   );
 }
 
+function shadeHex(hex, amount) {
+  const clean = String(hex || '#64748b').replace('#', '');
+  const value = Number.parseInt(clean.length === 3 ? clean.split('').map((item) => item + item).join('') : clean, 16);
+  if (Number.isNaN(value)) return hex;
+  const clamp = (channel) => Math.max(0, Math.min(255, channel + amount));
+  const red = clamp((value >> 16) & 255);
+  const green = clamp((value >> 8) & 255);
+  const blue = clamp(value & 255);
+  return `#${[red, green, blue].map((channel) => channel.toString(16).padStart(2, '0')).join('')}`;
+}
+
+function ThreeDBar({ x = 0, y = 0, width = 0, height = 0, fill = '#2563eb' }) {
+  if (!height || height < 1 || width < 1) return null;
+  const depth = Math.min(8, Math.max(4, width * 0.25));
+  const top = Math.max(0, y - depth);
+  const sideColor = shadeHex(fill, -36);
+  const topColor = shadeHex(fill, 34);
+
+  return (
+    <g>
+      <path d={`M ${x} ${y} L ${x + depth} ${top} L ${x + width + depth} ${top} L ${x + width} ${y} Z`} fill={topColor} />
+      <path d={`M ${x + width} ${y} L ${x + width + depth} ${top} L ${x + width + depth} ${y + height - depth} L ${x + width} ${y + height} Z`} fill={sideColor} />
+      <rect x={x} y={y} width={width} height={height} rx={6} fill={fill} />
+    </g>
+  );
+}
+
 function StatCard({ icon: Icon, label, value, hint }) {
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -907,23 +934,13 @@ export default function AdminDashboard() {
     () => (overview?.roleBreakdown || []).filter((item) => Number(item.value || 0) > 0),
     [overview]
   );
-  const trafficDateTicks = useMemo(() => {
-    const rows = overview?.daily || [];
-    if (rows.length <= 7) return rows.map((row) => row.label);
-
-    const targetTickCount = rows.length > 21 ? 5 : 4;
-    const tickIndexes = new Set([0, rows.length - 1]);
-    for (let index = 1; index < targetTickCount - 1; index += 1) {
-      tickIndexes.add(Math.round(((rows.length - 1) * index) / (targetTickCount - 1)));
-    }
-
-    return [...tickIndexes]
-      .sort((first, second) => first - second)
-      .map((index) => rows[index]?.label)
-      .filter(Boolean);
-  }, [overview]);
+  const monthlyTrafficData = useMemo(() => overview?.monthly || [], [overview]);
+  const activeTrafficDays = useMemo(
+    () => (overview?.daily || []).filter((row) => Number(row.visits || 0) > 0 || Number(row.registrations || 0) > 0),
+    [overview]
+  );
   const statusBreakdown = overview?.statusBreakdown || [];
-  const hasDailyData = (overview?.daily || []).some((row) => Number(row.visits || 0) > 0 || Number(row.registrations || 0) > 0);
+  const hasTrafficData = monthlyTrafficData.some((row) => Number(row.visits || 0) > 0 || Number(row.registrations || 0) > 0);
   const messageActivities = (overview?.recentActivity || []).filter((activity) => activity.type === 'Message');
   const activeAdminConversation = adminConversations.items.find((conversation) => conversation.id === activeAdminConversationId) || null;
 
@@ -993,31 +1010,72 @@ export default function AdminDashboard() {
   );
 
   const renderTrafficChart = () => (
-    <Panel title="Traffic and Registrations" subtitle="Page views and user registrations over the last 30 days">
+    <Panel title="Traffic and Registrations" subtitle="Monthly totals with active daily dates listed below">
       <div className="h-72">
-        {hasDailyData ? (
+        {hasTrafficData ? (
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={overview?.daily || []} margin={{ top: 10, right: 16, left: -18, bottom: 12 }} barCategoryGap="35%">
-              <CartesianGrid stroke="#e2e8f0" strokeDasharray="4 4" />
+            <BarChart data={monthlyTrafficData} margin={{ top: 18, right: 18, left: -18, bottom: 10 }} barCategoryGap="32%">
+              <CartesianGrid stroke="#e2e8f0" strokeDasharray="4 4" vertical={false} />
               <XAxis
                 dataKey="label"
-                ticks={trafficDateTicks}
                 interval={0}
-                minTickGap={28}
-                height={38}
+                minTickGap={18}
+                height={34}
                 tickMargin={10}
-                tick={{ fill: '#64748b', fontSize: 11 }}
+                tick={{ fill: '#64748b', fontSize: 11, fontWeight: 700 }}
                 axisLine={false}
                 tickLine={false}
               />
               <YAxis tick={{ fill: '#64748b', fontSize: 12 }} axisLine={false} tickLine={false} allowDecimals={false} />
               <Tooltip />
-              <Bar dataKey="visits" name="Page views" fill="#2563eb" radius={[8, 8, 0, 0]} maxBarSize={28} />
-              <Bar dataKey="registrations" name="Registrations" fill="#10b981" radius={[8, 8, 0, 0]} maxBarSize={28} />
+              <Bar dataKey="visits" name="Page views" fill="#2563eb" shape={<ThreeDBar />} maxBarSize={30} />
+              <Bar dataKey="registrations" name="Registrations" fill="#10b981" shape={<ThreeDBar />} maxBarSize={30} />
             </BarChart>
           </ResponsiveContainer>
         ) : (
           <EmptyState label="Traffic will appear here as visitors use the website." />
+        )}
+      </div>
+
+      <div className="mt-5 border-t border-slate-200 pt-5">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-black text-slate-950">Daily Activity Calendar</h3>
+            <p className="mt-1 text-xs font-semibold text-slate-500">Days in the last 30 days with visits or registrations</p>
+          </div>
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black uppercase text-slate-600">
+            {formatNumber(activeTrafficDays.length)} active days
+          </span>
+        </div>
+        {activeTrafficDays.length ? (
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {activeTrafficDays.map((day) => {
+              const date = new Date(`${day.date}T00:00:00`);
+              const month = new Intl.DateTimeFormat('en-IN', { month: 'short' }).format(date);
+              const weekday = new Intl.DateTimeFormat('en-IN', { weekday: 'short' }).format(date);
+              const dayNumber = new Intl.DateTimeFormat('en-IN', { day: '2-digit' }).format(date);
+              return (
+                <div key={day.date} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                  <div className="w-16 overflow-hidden rounded-xl border border-slate-200 bg-white text-center shadow-sm">
+                    <p className="bg-slate-950 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-white">{month}</p>
+                    <p className="py-2 text-2xl font-black leading-none text-slate-950">{dayNumber}</p>
+                    <p className="pb-2 text-[10px] font-black uppercase text-slate-400">{weekday}</p>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-black uppercase tracking-[0.12em] text-slate-400">{day.label}</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700">{formatNumber(day.visits)} visits</span>
+                      <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">{formatNumber(day.registrations)} registrations</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="mt-4">
+            <EmptyState label="No visitor or registration days in the last 30 days." />
+          </div>
         )}
       </div>
     </Panel>
