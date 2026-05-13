@@ -3128,15 +3128,11 @@ function switchTab(el) {
   text-decoration: none;
 }
 
-.sf-logo-icon {
-  width: 36px;
-  height: 36px;
-  background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.15);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.sf-logo-img {
+  width: 48px;
+  height: 42px;
+  object-fit: contain;
+  object-position: center;
   flex-shrink: 0;
 }
 
@@ -3348,23 +3344,7 @@ function switchTab(el) {
       <!-- Brand -->
       <div class="sf-brand">
         <a class="sf-logo" href="/">
-          <div class="sf-logo-icon">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-              <circle cx="10" cy="10" r="2.8" fill="white"/>
-              <circle cx="10"   cy="3.2"  r="1.8" fill="white" opacity="0.9"/>
-              <circle cx="16.8" cy="6.6"  r="1.8" fill="white" opacity="0.9"/>
-              <circle cx="16.8" cy="13.4" r="1.8" fill="white" opacity="0.9"/>
-              <circle cx="10"   cy="16.8" r="1.8" fill="white" opacity="0.9"/>
-              <circle cx="3.2"  cy="13.4" r="1.8" fill="white" opacity="0.9"/>
-              <circle cx="3.2"  cy="6.6"  r="1.8" fill="white" opacity="0.9"/>
-              <line x1="10"   y1="5"    x2="10"   y2="7.2"  stroke="white" stroke-width="1.2" stroke-linecap="round" opacity="0.6"/>
-              <line x1="15.4" y1="7.6"  x2="12.8" y2="8.7"  stroke="white" stroke-width="1.2" stroke-linecap="round" opacity="0.6"/>
-              <line x1="15.4" y1="12.4" x2="12.8" y2="11.3" stroke="white" stroke-width="1.2" stroke-linecap="round" opacity="0.6"/>
-              <line x1="10"   y1="15"   x2="10"   y2="12.8" stroke="white" stroke-width="1.2" stroke-linecap="round" opacity="0.6"/>
-              <line x1="4.6"  y1="12.4" x2="7.2"  y2="11.3" stroke="white" stroke-width="1.2" stroke-linecap="round" opacity="0.6"/>
-              <line x1="4.6"  y1="7.6"  x2="7.2"  y2="8.7"  stroke="white" stroke-width="1.2" stroke-linecap="round" opacity="0.6"/>
-            </svg>
-          </div>
+          <img src="assets/synkspace-logo.png" class="sf-logo-img" alt="SynkSpace Logo">
           <span class="sf-logo-name">SynkSpace</span>
         </a>
 
