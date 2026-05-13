@@ -51,14 +51,14 @@ const statusColors = {
 };
 
 const navItems = [
-  { id: 'overview', icon: BarChart3, label: 'Overview' },
-  { id: 'registrations', icon: Users, label: 'Registrations' },
-  { id: 'campaigns', icon: Megaphone, label: 'Campaigns' },
-  { id: 'applications', icon: ClipboardList, label: 'Applications' },
-  { id: 'user-management', icon: UserCog, label: 'User Management' },
-  { id: 'traffic', icon: Globe2, label: 'Traffic' },
-  { id: 'messages', icon: MessageSquare, label: 'Messages' },
-  { id: 'audit', icon: ShieldCheck, label: 'Audit' },
+  { id: 'overview', icon: BarChart3, label: 'Overview', description: 'Live platform metrics, traffic, registrations, and recent activity' },
+  { id: 'registrations', icon: Users, label: 'Registrations', description: 'Review creator, brand, and event organiser profiles from onboarding' },
+  { id: 'campaigns', icon: Megaphone, label: 'Campaigns', description: 'Monitor campaigns, slots, budgets, and campaign status' },
+  { id: 'applications', icon: ClipboardList, label: 'Applications', description: 'Track creator applications, proposals, and acceptance status' },
+  { id: 'user-management', icon: UserCog, label: 'User Management', description: 'Manage users, profile details, access status, and login history' },
+  { id: 'traffic', icon: Globe2, label: 'Traffic', description: 'Monthly traffic totals and active visitor calendar' },
+  { id: 'messages', icon: MessageSquare, label: 'Messages', description: 'Site Admin inbox and user conversations' },
+  { id: 'audit', icon: ShieldCheck, label: 'Audit', description: 'Verification, account status, team invites, and marketplace health' },
 ];
 
 const registrationRoles = [
@@ -578,6 +578,7 @@ export default function AdminDashboard() {
   const [overview, setOverview] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState(null);
   const [error, setError] = useState('');
   const [registrationRole, setRegistrationRole] = useState('CREATOR');
   const [registrationSearch, setRegistrationSearch] = useState('');
@@ -636,6 +637,7 @@ export default function AdminDashboard() {
     try {
       const response = await apiGet('/api/admin/overview');
       setOverview(response?.data || null);
+      setLastRefreshedAt(new Date().toISOString());
     } catch (overviewError) {
       setError(overviewError?.message || 'Could not load admin dashboard.');
     } finally {
@@ -930,6 +932,7 @@ export default function AdminDashboard() {
 
   const totals = overview?.totals || {};
   const activeNav = navItems.find((item) => item.id === activeSection) || navItems[0];
+  const headerUpdatedAt = lastRefreshedAt || overview?.generatedAt;
   const roleBreakdown = useMemo(
     () => (overview?.roleBreakdown || []).filter((item) => Number(item.value || 0) > 0),
     [overview]
@@ -1820,7 +1823,7 @@ export default function AdminDashboard() {
               </div>
               <h1 className="hidden text-2xl font-black text-slate-950 lg:block">{activeNav.label}</h1>
               <p className="mt-1 truncate text-sm font-semibold text-slate-500">
-                Updated {formatDate(overview?.generatedAt)}
+                {activeNav.description} • Refreshed {formatDate(headerUpdatedAt)}
               </p>
             </div>
 
